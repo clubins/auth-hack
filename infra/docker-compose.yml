@@ -1,0 +1,109 @@
+# Local development stack for the Clubins customer-auth reference:
+#
+#   cd infra && cp .env.example .env && docker compose up -d --build
+#
+#   postgres  PostgreSQL 16 — datastore for Logto ONLY. The Go API keeps its
+#             in-memory stores in this stack; there is no backend DB yet.
+#   logto     Logto OSS — the customer OIDC issuer. Core (discovery, JWKS,
+#             authorize, token) on 3001, admin console on 3002.
+#   backend   The Go API, built from ../backend by backend/Dockerfile.
+#
+# Pins are deliberate (verified on Docker Hub, 2026-10-30):
+#   svhd/logto:1.45.0 — current stable v1.x; `latest` points at the same
+#   digest today but is never used as a pin. Logto database alterations are
+#   one-way: bump the tag deliberately, never automatically.
+#
+# Issuer wiring (the one subtle bit — see infra/README.md):
+#   Logto serves OIDC under <ENDPOINT>/oidc and reports that as the issuer.
+#   Every component must agree on it: ENDPOINT here, ISSUER_URL in the
+#   backend, and the Flutter app's CLUBINS_ISSUER dart-define.
+name: clubins-auth
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: logto
+      POSTGRES_USER: logto
+      # Required, no default: the stack refuses to start without an explicit
+      # LOGTO_DB_PASSWORD in infra/.env (placeholders only in .env.example).
+      POSTGRES_PASSWORD: ${LOGTO_DB_PASSWORD:?set LOGTO_DB_PASSWORD in infra/.env}
+    volumes:
+      - logto-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logto -d logto"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  logto:
+    image: svhd/logto:1.45.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Same seeding entrypoint as upstream's docker-compose sample: the image
+    # does not seed the database on first boot by itself. Idempotent on
+    # later boots; version alterations apply on start.
+    entrypoint: ["sh", "-c", "npm run cli db seed -- --swe && npm start"]
+    environment:
+      # DB_URL carries the postgres password — from infra/.env only, never
+      # committed anywhere.
+      DB_URL: postgres://logto:${LOGTO_DB_PASSWORD}@postgres:5432/logto
+      # ENDPOINT is the public base URL; the OIDC issuer becomes
+      # <ENDPOINT>/oidc and must equal the backend's ISSUER_URL below —
+      # change both together.
+      ENDPOINT: ${LOGTO_ENDPOINT:-http://localhost:3301}
+      ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT:-http://localhost:3302}
+    ports:
+      - "${LOGTO_PORT:-3301}:3001" # core: discovery, JWKS, authorize, token
+      - "${LOGTO_ADMIN_PORT:-3302}:3002" # admin console (local configuration)
+    healthcheck:
+      # node is the runtime inside the image; discovery answering 200 means
+      # the OIDC core (and its signing keys) are serving. The JS string is
+      # double-quoted for YAML (its `? 0 : 1` would otherwise parse as a
+      # mapping) with single quotes for its URLs inside.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/oidc/.well-known/openid-configuration').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s # first boot seeds and migrates the database
+
+  backend:
+    build:
+      # Relative to this compose file: the repo's ./backend.
+      context: ../backend
+      dockerfile: Dockerfile
+    depends_on:
+      logto:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Token identity wiring. ISSUER_URL must equal <ENDPOINT>/oidc exactly —
+      # every token's iss claim is checked against it.
+      ISSUER_URL: ${ISSUER_URL:-http://localhost:3301/oidc}
+      AUDIENCE: ${AUDIENCE:-https://api.clubins.de}
+      # Inside the compose network the issuer URL does not resolve (the
+      # container's own localhost is not the host), so the JWKS fetch is
+      # pinned to the service-internal path. Signature, iss, aud, and exp
+      # checks are unaffected — they still enforce the public issuer above.
+      JWKS_URL: ${JWKS_URL:-http://logto:3001/oidc/jwks}
+    healthcheck:
+      # /healthz is public (no bearer token); wget is busybox in alpine.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  logto-pgdata:
