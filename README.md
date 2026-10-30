@@ -9,15 +9,21 @@ grants in the Go API — no paid Logto features. Local development runs the stac
 with Docker Compose; prod-shaped NixOS modules (oci-containers, Caddy, SOPS)
 mirror that layout.
 
-## Quickstart (placeholder)
+## Quickstart (local stack)
 
-The runnable stack is not wired up yet — this seed carries the skeleton, CI,
-and docs only. Component tasks land against this base next.
+```bash
+cd infra && cp .env.example .env && docker compose up -d --build
+curl -fsS http://localhost:3301/oidc/.well-known/openid-configuration  # issuer discovery
+curl -fsS http://localhost:8080/healthz                                # Go API
+```
+
+Details and issuer wiring: [infra/README.md](infra/README.md).
 
 | Component    | Path        | Check                                                |
 | ------------ | ----------- | ---------------------------------------------------- |
 | Go API       | `backend/`  | `go test ./...`                                      |
 | Flutter app  | `frontend/` | `flutter pub get && flutter analyze && flutter test` |
+| Local stack  | `infra/`    | `docker compose up -d --build` (see quickstart above) |
+| Prod infra   | `infra/nixos/` | `bash scripts/check-nix.sh` (Nix parse gate — no Nix runner in CI yet) |
 | Logto config | `idp/`      | placeholder                                          |
-| Infra        | `infra/`    | `bash scripts/check-nix.sh` (Nix parse gate — no Nix runner in CI yet) |
 | Spike tools  | `scripts/`  | placeholder                                          |
