@@ -1,0 +1,44 @@
+name: idp
+
+on:
+  pull_request:
+    paths:
+      - "idp/**"
+      - ".github/workflows/idp.yml"
+
+# Least-privilege token for all jobs; actions are pinned to commit SHAs
+# so a compromised tag cannot move the pin. Renovate/Dependabot manages bumps.
+permissions:
+  contents: read
+
+jobs:
+  seed-idempotency:
+    name: shellcheck and seed idempotency (mock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The v0.10.0 release ships no checksum file, so the tarball digest is
+      # pinned directly (computed from the official release asset at
+      # adoption time); a changed digest fails the build.
+      - name: Install shellcheck (pinned, digest-verified)
+        run: |
+          cd /tmp
+          curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz" -o shellcheck.tar.xz
+          echo "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz
+          sudo mv shellcheck-v0.10.0/shellcheck /usr/local/bin/shellcheck
+
+      - name: Parse-check every shell script (bash -n)
+        run: |
+          for f in idp/*.sh idp/test/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: Lint shell scripts (shellcheck)
+        run: shellcheck idp/lib.sh idp/seed.sh idp/test/run-mock-tests.sh
+
+      # Runs the seed twice against the Management API mock: the second run
+      # must create nothing and exit 0. Docker-free by design.
+      - name: Seed idempotency against the Management API mock
+        run: idp/test/run-mock-tests.sh
