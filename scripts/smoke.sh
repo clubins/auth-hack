@@ -133,6 +133,18 @@ have_vars() {
   done
 }
 
+# m2m_usable — true when both M2M credentials look like real values. A copied
+# .env.example can carry replace-me-* placeholders; those must not count as
+# credentials, or the smoke tries them on the real issuer and fails with a
+# confusing invalid_client instead of the documented SKIP.
+m2m_usable() {
+  have_vars LOGTO_M2M_CLIENT_ID LOGTO_M2M_CLIENT_SECRET || return 1
+  local var
+  for var in "$LOGTO_M2M_CLIENT_ID" "$LOGTO_M2M_CLIENT_SECRET"; do
+    case "$var" in replace-me-*) return 1 ;; esac
+  done
+}
+
 # env_value FILE KEY — the value of KEY in a .env file, or empty.
 env_value() {
   sed -n "s/^${2}=//p" "$1" 2>/dev/null | head -1 | tr -d '"' || true
@@ -241,6 +253,23 @@ step_a_env() {
   [ -n "$pw" ] || { REASON="could not establish LOGTO_DB_PASSWORD in infra/.env"; return 1; }
   ENV_FILE_PATH="$REPO_ROOT/infra/.env"
   export LOGTO_DB_PASSWORD="$pw"
+  # Mirror spike.sh: M2M credentials may live in infra/.env rather than the
+  # environment. Export real values from the file so m2m_usable sees them;
+  # empty values stay unset (no credentials = documented SKIPs).
+  local key value
+  for key in LOGTO_M2M_CLIENT_ID LOGTO_M2M_CLIENT_SECRET; do
+    if [ -z "${!key:-}" ]; then
+      value="$(env_value "$ENV_FILE_PATH" "$key")"
+      [ -n "$value" ] || continue
+      export "$key=$value"
+    fi
+  done
+  # Phase A curls the compose-PUBLISHED API port (host side), which defaults
+  # to 8080 via infra/.env — distinct from BACKEND_PORT, the phase-B
+  # standalone backend's port.
+  local api_port
+  api_port="$(env_value "$ENV_FILE_PATH" API_PORT)"
+  API_BASE="http://localhost:${api_port:-8080}"
 }
 
 step_a_compose_up() {
@@ -254,7 +283,7 @@ step_a_compose_up() {
 }
 
 step_a_seed() {
-  if ! have_vars LOGTO_M2M_CLIENT_ID LOGTO_M2M_CLIENT_SECRET; then
+  if ! m2m_usable; then
     REASON="no M2M credentials (LOGTO_M2M_CLIENT_ID, LOGTO_M2M_CLIENT_SECRET) — the one-time Admin Console bootstrap in idp/README.md provides them; without them nothing can be seeded, and token issuance below skips too"
     return 2
   fi
@@ -265,7 +294,7 @@ step_a_seed() {
 step_a_spike() {
   local args=()
   # Credentials may come from the environment or infra/.env (spike loads it).
-  if ! have_vars LOGTO_M2M_CLIENT_ID LOGTO_M2M_CLIENT_SECRET; then
+  if ! m2m_usable; then
     args+=(--token-optional)
   fi
   bash "$REPO_ROOT/scripts/spike.sh" "${args[@]}" >"$WORK/spike.log" 2>&1 \
@@ -292,7 +321,6 @@ phase_a() {
   STEP_NUM=0
   FIRST_FAILED=''
   SKIP_COUNT=0
-  API_BASE="http://localhost:${BACKEND_PORT}"
   log "phase A: REAL compose stack (docker compose up, seed, spike, guard wiring)"
   run_step "docker + compose available" step_a_docker
   run_step "compose environment ready" step_a_env
