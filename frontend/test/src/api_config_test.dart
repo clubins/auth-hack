@@ -44,11 +44,11 @@ void main() {
     test('createGrant guards the server window bounds client-side', () {
       final api = HttpVenuesApi(_unreachable());
       expect(
-        () => api.createGrant('v-1', email: 'a@b.de', hours: 7),
+        () => api.createGrant('v-1', hours: 7),
         throwsArgumentError,
       );
       expect(
-        () => api.createGrant('v-1', email: 'a@b.de', hours: 25),
+        () => api.createGrant('v-1', hours: 25),
         throwsArgumentError,
       );
     });

@@ -55,7 +55,7 @@ void main() {
   });
 
   group('VenueGrant.fromJson', () {
-    test('parses the grants shape with an active grant', () {
+    test('parses the create-201 shape with a token', () {
       final grant = VenueGrant.fromJson({
         'id': 'g-1',
         'venueId': 'v-001',
@@ -70,18 +70,36 @@ void main() {
       expect(grant.isRevoked, isFalse);
     });
 
-    test('parses a revoked grant', () {
+    // Regression: list and revoke responses redact the token
+    // (backend/internal/grants/handler.go grantView serializes no token
+    // field). A token-requiring parser threw FormatException on every
+    // real list/revoke response.
+    test('parses a token-less list/revoke view (redacted shape)', () {
       final grant = VenueGrant.fromJson({
         'id': 'g-1',
         'venueId': 'v-001',
         'subject': 'user-123',
-        'token': 'opaque-token',
+        'expiresAt': '2026-10-30T16:00:00Z',
+        'createdAt': '2026-10-30T08:00:00Z',
+      });
+      expect(grant.id, 'g-1');
+      expect(grant.subject, 'user-123');
+      expect(grant.token, isNull);
+      expect(grant.isRevoked, isFalse);
+    });
+
+    test('parses a revoked, token-less view', () {
+      final grant = VenueGrant.fromJson({
+        'id': 'g-1',
+        'venueId': 'v-001',
+        'subject': 'user-123',
         'expiresAt': '2026-10-30T16:00:00Z',
         'createdAt': '2026-10-30T08:00:00Z',
         'revokedAt': '2026-10-30T09:00:00Z',
       });
       expect(grant.isRevoked, isTrue);
       expect(grant.revokedAt, DateTime.utc(2026, 10, 30, 9));
+      expect(grant.token, isNull);
     });
   });
 
@@ -122,15 +140,14 @@ void main() {
       expect(url!.path, '/venues/v-002/readings');
     });
 
-    test('createGrant posts the email and ttl to the grants route',
-        () async {
+    test('createGrant posts ttl only to the grants route', () async {
       http.Request? request;
       final api = HttpVenuesApi(ApiClient(
         baseUrl: Uri.parse('http://localhost:8080'),
         client: MockClient((r) async {
           request = r;
           return http.Response(
-            '{"id":"g-1","venueId":"v-001","subject":"a@b.de",'
+            '{"id":"g-1","venueId":"v-001","subject":"user-123",'
             '"token":"tok","expiresAt":"2026-10-30T16:00:00Z",'
             '"createdAt":"2026-10-30T08:00:00Z"}',
             201,
@@ -139,22 +156,25 @@ void main() {
         tokenProvider: () async => 't',
       ));
 
-      final grant = await api.createGrant('v-001', email: 'a@b.de', hours: 12);
+      final grant = await api.createGrant('v-001', hours: 12);
       expect(request!.method, 'POST');
       expect(request!.url.path, '/venues/v-001/grants');
-      expect(request!.body, '{"email":"a@b.de","ttl":"12h"}');
+      // The API decodes with DisallowUnknownFields — ttl is the only
+      // field it accepts.
+      expect(request!.body, '{"ttl":"12h"}');
       expect(grant.token, 'tok');
     });
 
-    test('revokeGrant DELETEs the venue-scoped grant route', () async {
+    test('revokeGrant DELETEs the global /grants/{id} route', () async {
       http.Request? request;
       final api = HttpVenuesApi(ApiClient(
         baseUrl: Uri.parse('http://localhost:8080'),
         client: MockClient((r) async {
           request = r;
+          // The revoke response is the token-redacted view.
           return http.Response(
-            '{"id":"g-1","venueId":"v-001","subject":"a@b.de",'
-            '"token":"","expiresAt":"2026-10-30T16:00:00Z",'
+            '{"id":"g-1","venueId":"v-001","subject":"user-123",'
+            '"expiresAt":"2026-10-30T16:00:00Z",'
             '"createdAt":"2026-10-30T08:00:00Z",'
             '"revokedAt":"2026-10-30T09:00:00Z"}',
             200,
@@ -163,9 +183,11 @@ void main() {
         tokenProvider: () async => 't',
       ));
 
-      await api.revokeGrant('v-001', 'g-1');
+      final grant = await api.revokeGrant('g-1');
       expect(request!.method, 'DELETE');
-      expect(request!.url.path, '/venues/v-001/grants/g-1');
+      expect(request!.url.path, '/grants/g-1');
+      expect(grant.isRevoked, isTrue);
+      expect(grant.token, isNull);
     });
 
     test('a malformed array item becomes an ApiException', () async {

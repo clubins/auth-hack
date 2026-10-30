@@ -5,9 +5,11 @@ import '../api/api.dart';
 import 'format.dart';
 import 'widgets.dart';
 
-/// Owner-facing share-access screen for one venue: invite a renter by
-/// email for a bounded window (server bounds: 8–24h, default 8h), then
-/// share the returned grant token; the grants list below revokes early.
+/// Owner-facing share-access screen for one venue: open a bounded
+/// read-only window (server bounds: 8–24h, default 8h) and hand the
+/// returned grant token to the renter out of band — the token is the
+/// share mechanism, delivered exactly once by the create response. The
+/// grants list below revokes early.
 ///
 /// All transport goes through the injected [VenuesApi].
 class ShareAccessScreen extends StatefulWidget {
@@ -22,14 +24,7 @@ class ShareAccessScreen extends StatefulWidget {
 
 enum _GrantsPhase { loading, ready, error }
 
-/// Same pattern the form validator uses — loose on purpose: the server
-/// owns the real verification.
-final _emailPattern = RegExp(r'^\S+@\S+\.\S+$');
-
 class _ShareAccessScreenState extends State<ShareAccessScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-
   int _hours = defaultGrantHours;
   bool _sending = false;
   VenueGrant? _createdGrant;
@@ -43,12 +38,6 @@ class _ShareAccessScreenState extends State<ShareAccessScreen> {
   void initState() {
     super.initState();
     _loadGrants();
-  }
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadGrants() async {
@@ -74,15 +63,10 @@ class _ShareAccessScreenState extends State<ShareAccessScreen> {
   }
 
   Future<void> _createGrant() async {
-    final valid = _formKey.currentState?.validate() ?? false;
-    if (!valid) {
-      return;
-    }
     setState(() => _sending = true);
     try {
       final grant = await widget.venuesApi.createGrant(
         widget.venue.id,
-        email: _emailController.text.trim(),
         hours: _hours,
       );
       if (!mounted) {
@@ -90,7 +74,6 @@ class _ShareAccessScreenState extends State<ShareAccessScreen> {
       }
       setState(() {
         _createdGrant = grant;
-        _emailController.clear();
         _hours = defaultGrantHours;
       });
       await _loadGrants();
@@ -109,7 +92,7 @@ class _ShareAccessScreenState extends State<ShareAccessScreen> {
   Future<void> _revoke(VenueGrant grant) async {
     setState(() => _revoking.add(grant.id));
     try {
-      await widget.venuesApi.revokeGrant(widget.venue.id, grant.id);
+      await widget.venuesApi.revokeGrant(grant.id);
       await _loadGrants();
     } on ApiException catch (e) {
       if (mounted) {
@@ -142,9 +125,7 @@ class _ShareAccessScreenState extends State<ShareAccessScreen> {
         children: [
           Text('Grant read access', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          _GrantForm(
-            formKey: _formKey,
-            emailController: _emailController,
+          _WindowPicker(
             hours: _hours,
             sending: _sending,
             onHoursChanged: (hours) => setState(() => _hours = hours),
@@ -173,8 +154,9 @@ class _ShareAccessScreenState extends State<ShareAccessScreen> {
                   icon: Icons.group_off,
                   title: 'No grants yet',
                   subtitle:
-                      'Invite a renter above to share read-only access '
-                      'for a limited window.',
+                      'Create an access window above and hand the token '
+                      'to your renter — it grants read-only access '
+                      'until it expires.',
                 ),
               _GrantsPhase.ready => ListView.separated(
                   itemCount: _grants.length,
@@ -218,21 +200,17 @@ class _ShareAccessScreenState extends State<ShareAccessScreen> {
   }
 }
 
-/// The invite form: email field plus the 8–24h window picker. The picker
-/// is a bounded slider — it cannot produce a request the server would
+/// The one-step window picker: an 8–24h slider plus the create action.
+/// The picker is bounded — it cannot produce a request the server would
 /// reject with 422.
-class _GrantForm extends StatelessWidget {
-  const _GrantForm({
-    required this.formKey,
-    required this.emailController,
+class _WindowPicker extends StatelessWidget {
+  const _WindowPicker({
     required this.hours,
     required this.sending,
     required this.onHoursChanged,
     required this.onSubmit,
   });
 
-  final GlobalKey<FormState> formKey;
-  final TextEditingController emailController;
   final int hours;
   final bool sending;
   final ValueChanged<int> onHoursChanged;
@@ -240,61 +218,35 @@ class _GrantForm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Form(
-      key: formKey,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextFormField(
-            key: const Key('grant-email-field'),
-            controller: emailController,
-            decoration: const InputDecoration(
-              labelText: 'Renter email',
-              hintText: 'renter@example.com',
-              border: OutlineInputBorder(),
-            ),
-            keyboardType: TextInputType.emailAddress,
-            autofillHints: const [AutofillHints.email],
-            enabled: !sending,
-            validator: (value) {
-              final email = value?.trim() ?? '';
-              if (email.isEmpty) {
-                return 'Enter an email address';
-              }
-              if (!_emailPattern.hasMatch(email)) {
-                return 'Enter a valid email address';
-              }
-              return null;
-            },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Access window: $hours h'),
+        Slider(
+          key: const Key('grant-window-slider'),
+          value: hours.toDouble(),
+          min: minGrantHours.toDouble(),
+          max: maxGrantHours.toDouble(),
+          divisions: maxGrantHours - minGrantHours,
+          label: '$hours h',
+          onChanged: sending ? null : (value) => onHoursChanged(value.round()),
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton.icon(
+            key: const Key('create-grant-button'),
+            onPressed: sending ? null : onSubmit,
+            icon: const Icon(Icons.key),
+            label: Text(sending ? 'Creating…' : 'Create access window'),
           ),
-          const SizedBox(height: 8),
-          Text('Access window: $hours h'),
-          Slider(
-            key: const Key('grant-window-slider'),
-            value: hours.toDouble(),
-            min: minGrantHours.toDouble(),
-            max: maxGrantHours.toDouble(),
-            divisions: maxGrantHours - minGrantHours,
-            label: '$hours h',
-            onChanged: sending ? null : (value) => onHoursChanged(value.round()),
-          ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton.icon(
-              key: const Key('create-grant-button'),
-              onPressed: sending ? null : onSubmit,
-              icon: const Icon(Icons.send),
-              label: Text(sending ? 'Inviting…' : 'Send invite'),
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
 /// The just-created grant: the token is shown once, with a copy
-/// affordance, so the owner can hand it to the renter.
+/// affordance, so the owner can hand it to the renter out of band.
 class _CreatedGrantCard extends StatelessWidget {
   const _CreatedGrantCard({required this.grant, required this.onCopy});
 
@@ -303,6 +255,13 @@ class _CreatedGrantCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final token = grant.token;
+    if (token == null) {
+      // Unreachable against the real API (the create-201 body always
+      // carries the token); absent is rendered as absent, never as a
+      // blank row.
+      return const SizedBox.shrink();
+    }
     return Card(
       color: Theme.of(context).colorScheme.secondaryContainer,
       child: Padding(
@@ -316,7 +275,7 @@ class _CreatedGrantCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             SelectableText(
-              grant.token,
+              token,
               key: const Key('created-grant-token'),
               style: Theme.of(context)
                   .textTheme

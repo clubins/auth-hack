@@ -64,7 +64,7 @@ class VenueGrant {
     required this.id,
     required this.venueId,
     required this.subject,
-    required this.token,
+    this.token,
     required this.expiresAt,
     required this.createdAt,
     this.revokedAt,
@@ -74,7 +74,7 @@ class VenueGrant {
         id: json['id'] as String,
         venueId: json['venueId'] as String,
         subject: json['subject'] as String,
-        token: json['token'] as String,
+        token: json['token'] as String?,
         expiresAt: timestamp(json['expiresAt'], 'grant.expiresAt'),
         createdAt: timestamp(json['createdAt'], 'grant.createdAt'),
         revokedAt: json['revokedAt'] == null
@@ -88,7 +88,12 @@ class VenueGrant {
   /// The grant holder's identity, or the invited identity before the
   /// holder has ever signed in.
   final String subject;
-  final String token;
+
+  /// The bearer token for this grant — delivered exactly once, in the
+  /// create-201 body. List and revoke responses redact it by design (a
+  /// venue-read-scoped caller must not be able to impersonate renters),
+  /// so grants parsed from those responses carry null here.
+  final String? token;
   final DateTime expiresAt;
   final DateTime createdAt;
 

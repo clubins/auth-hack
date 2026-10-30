@@ -82,11 +82,11 @@ void main() {
   testWidgets('opens share access for an owner and lists grants',
       (tester) async {
     final api = FakeVenuesApi(grants: [
+      // List responses are token-redacted; the subject is a sub.
       VenueGrant(
         id: 'g-1',
         venueId: 'v-001',
-        subject: 'renter@example.de',
-        token: 'opaque-token',
+        subject: 'user-2kfiXKzqR7BjxM8n',
         expiresAt: DateTime.utc(2026, 10, 30, 16),
         createdAt: DateTime.utc(2026, 10, 30, 8),
       ),
@@ -100,7 +100,7 @@ void main() {
     // The share screen's section header proves the navigation landed (the
     // detail screen's share affordance is a tooltip, not a Text widget).
     expect(find.text('Grant read access'), findsOneWidget);
-    expect(find.text('renter@example.de'), findsOneWidget);
+    expect(find.text('user-2kfiXKzqR7BjxM8n'), findsOneWidget);
     expect(api.listGrantsCalls, 1);
   });
 }

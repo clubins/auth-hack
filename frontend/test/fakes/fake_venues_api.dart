@@ -44,9 +44,7 @@ class FakeVenuesApi implements VenuesApi {
   int revokeGrantCalls = 0;
 
   String? lastCreateVenueId;
-  String? lastCreatedEmail;
   int? lastCreatedHours;
-  String? lastRevokeVenueId;
   String? lastRevokedGrantId;
 
   /// Lets a test park a call mid-flight: when non-null, the method future
@@ -102,45 +100,44 @@ class FakeVenuesApi implements VenuesApi {
   @override
   Future<VenueGrant> createGrant(
     String venueId, {
-    required String email,
     required int hours,
   }) async {
     createGrantCalls++;
     lastCreateVenueId = venueId;
-    lastCreatedEmail = email;
     lastCreatedHours = hours;
     await _maybeGate();
     final error = createGrantError;
     if (error != null) {
       throw error;
     }
+    // Mirrors the create-201 contract: the full grant INCLUDING the token
+    // (subject is the creating principal, assigned server-side).
     return createdGrant ??
         VenueGrant(
           id: 'grant-1',
           venueId: venueId,
-          subject: email,
-          token: 'grant-token-for-$email',
+          subject: 'owner-subject',
+          token: 'opaque-grant-token',
           expiresAt: DateTime.parse('2026-10-31T08:00:00Z'),
           createdAt: DateTime.parse('2026-10-30T08:00:00Z'),
         );
   }
 
   @override
-  Future<VenueGrant> revokeGrant(String venueId, String grantId) async {
+  Future<VenueGrant> revokeGrant(String grantId) async {
     revokeGrantCalls++;
-    lastRevokeVenueId = venueId;
     lastRevokedGrantId = grantId;
     await _maybeGate();
     final error = revokeGrantError;
     if (error != null) {
       throw error;
     }
+    // Mirrors the revoke contract: the view WITHOUT the token.
     final revoked = revokedGrant ??
         VenueGrant(
           id: grantId,
-          venueId: venueId,
-          subject: 'revoked@example.de',
-          token: '',
+          venueId: 'v-001',
+          subject: 'owner-subject',
           expiresAt: DateTime.parse('2026-10-31T08:00:00Z'),
           createdAt: DateTime.parse('2026-10-30T08:00:00Z'),
           revokedAt: DateTime.parse('2026-10-30T09:00:00Z'),

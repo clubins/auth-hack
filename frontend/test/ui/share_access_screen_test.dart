@@ -14,14 +14,26 @@ final _venue = Venue(
   updatedAt: DateTime.utc(2026, 10, 30, 12),
 );
 
+/// A grant as list responses carry it: token-redacted, subject is the
+/// creating principal's server-assigned sub.
 VenueGrant _grant({bool revoked = false}) => VenueGrant(
       id: 'g-1',
       venueId: 'v-001',
-      subject: 'renter@example.de',
-      token: 'opaque-token',
+      subject: 'user-2kfiXKzqR7BjxM8n',
       expiresAt: DateTime.utc(2026, 10, 30, 16),
       createdAt: DateTime.utc(2026, 10, 30, 8),
       revokedAt: revoked ? DateTime.utc(2026, 10, 30, 9) : null,
+    );
+
+/// A grant as the create-201 body carries it: WITH the token — the only
+/// response that ever includes it.
+VenueGrant _createdGrant() => VenueGrant(
+      id: 'g-new',
+      venueId: 'v-001',
+      subject: 'user-2kfiXKzqR7BjxM8n',
+      token: 'opaque-token',
+      expiresAt: DateTime.utc(2026, 10, 30, 16),
+      createdAt: DateTime.utc(2026, 10, 30, 8),
     );
 
 Future<FakeVenuesApi> _pump(
@@ -37,30 +49,26 @@ Future<FakeVenuesApi> _pump(
   return effective;
 }
 
-Future<void> _fillEmail(WidgetTester tester) => tester.enterText(
-      find.byKey(const Key('grant-email-field')),
-      'renter@example.de',
-    );
-
 void main() {
   setUp(() {
     TestWidgetsFlutterBinding.ensureInitialized();
     installMockClipboard();
   });
 
-  testWidgets('defaults to the 8-hour window and creates a grant',
+  testWidgets('creates a grant in one step and shows the shareable token',
       (tester) async {
-    final api = await _pump(tester, api: FakeVenuesApi(createdGrant: _grant()));
+    final api = await _pump(
+      tester,
+      api: FakeVenuesApi(createdGrant: _createdGrant()),
+    );
 
     expect(find.text('Access window: 8 h'), findsOneWidget);
 
-    await _fillEmail(tester);
     await tester.tap(find.byKey(const Key('create-grant-button')));
     await tester.pumpAndSettle();
 
     expect(api.createGrantCalls, 1);
     expect(api.lastCreateVenueId, 'v-001');
-    expect(api.lastCreatedEmail, 'renter@example.de');
     expect(api.lastCreatedHours, 8);
     expect(find.text('Grant created — share this token'), findsOneWidget);
     expect(find.textContaining('opaque-token'), findsOneWidget);
@@ -76,36 +84,10 @@ void main() {
 
     expect(find.text('Access window: 16 h'), findsOneWidget);
 
-    await _fillEmail(tester);
     await tester.tap(find.byKey(const Key('create-grant-button')));
     await tester.pumpAndSettle();
 
     expect(api.lastCreatedHours, 16);
-  });
-
-  testWidgets('email validation blocks submission with an inline error',
-      (tester) async {
-    final api = await _pump(tester, api: FakeVenuesApi());
-
-    await tester.enterText(
-      find.byKey(const Key('grant-email-field')),
-      'not-an-email',
-    );
-    await tester.tap(find.byKey(const Key('create-grant-button')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Enter a valid email address'), findsOneWidget);
-    expect(api.createGrantCalls, 0);
-  });
-
-  testWidgets('an empty email is rejected before any call', (tester) async {
-    final api = await _pump(tester, api: FakeVenuesApi());
-
-    await tester.tap(find.byKey(const Key('create-grant-button')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Enter an email address'), findsOneWidget);
-    expect(api.createGrantCalls, 0);
   });
 
   testWidgets('server rejections surface as a SnackBar with the reason',
@@ -117,7 +99,6 @@ void main() {
       ),
     );
 
-    await _fillEmail(tester);
     await tester.tap(find.byKey(const Key('create-grant-button')));
     await tester.pumpAndSettle();
 
@@ -130,10 +111,9 @@ void main() {
       (tester) async {
     await _pump(
       tester,
-      api: FakeVenuesApi(createdGrant: _grant()),
+      api: FakeVenuesApi(createdGrant: _createdGrant()),
     );
 
-    await _fillEmail(tester);
     await tester.tap(find.byKey(const Key('create-grant-button')));
     await tester.pumpAndSettle();
 
@@ -152,14 +132,13 @@ void main() {
       api: FakeVenuesApi(grants: [_grant()], revokedGrant: revoked),
     );
 
-    expect(find.text('renter@example.de'), findsOneWidget);
+    expect(find.text('user-2kfiXKzqR7BjxM8n'), findsOneWidget);
     expect(find.textContaining('Expires'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('revoke-grant-g-1')));
     await tester.pumpAndSettle();
 
     expect(api.revokeGrantCalls, 1);
-    expect(api.lastRevokeVenueId, 'v-001');
     expect(api.lastRevokedGrantId, 'g-1');
     // The list reloads; the fake now serves the revoked grant, whose tile
     // carries the blocked icon instead of a revoke button.
@@ -191,7 +170,7 @@ void main() {
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
 
-    expect(find.text('renter@example.de'), findsOneWidget);
+    expect(find.text('user-2kfiXKzqR7BjxM8n'), findsOneWidget);
     expect(api.listGrantsCalls, 2);
   });
 

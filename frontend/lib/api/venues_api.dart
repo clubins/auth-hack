@@ -23,20 +23,24 @@ abstract interface class VenuesApi {
   Future<List<Reading>> listReadings(String venueId);
 
   /// Existing access grants for one venue, newest first is the server's
-  /// choice; the UI renders the list as given.
+  /// choice; the UI renders the list as given. Items arrive token-redacted
+  /// ([VenueGrant.token] is null here by server design).
   Future<List<VenueGrant>> listGrants(String venueId);
 
-  /// Invites [email] to read [venueId] for the next [hours] hours
-  /// (bounded by [minGrantHours]/[maxGrantHours]) and returns the created
-  /// grant, whose [VenueGrant.token] is shown to the owner for sharing.
+  /// Opens a read-only access window on [venueId] for the next [hours]
+  /// hours (bounded by [minGrantHours]/[maxGrantHours]) and returns the
+  /// created grant — the only response that carries the shareable
+  /// [VenueGrant.token]. The subject is assigned server-side from the
+  /// creating principal; the body is `{"ttl": "<n>h"}` and nothing else
+  /// (the API decodes with DisallowUnknownFields).
   Future<VenueGrant> createGrant(
     String venueId, {
-    required String email,
     required int hours,
   });
 
-  /// Revokes a grant early; returns the revoked grant.
-  Future<VenueGrant> revokeGrant(String venueId, String grantId);
+  /// Revokes a grant early; returns the revoked (token-redacted) grant.
+  /// The route is global (`DELETE /grants/{id}`), not venue-scoped.
+  Future<VenueGrant> revokeGrant(String grantId);
 }
 
 /// [VenuesApi] over [ApiClient] — the only place that knows the routes.
@@ -62,7 +66,6 @@ class HttpVenuesApi implements VenuesApi {
   @override
   Future<VenueGrant> createGrant(
     String venueId, {
-    required String email,
     required int hours,
   }) {
     if (hours < minGrantHours || hours > maxGrantHours) {
@@ -75,17 +78,15 @@ class HttpVenuesApi implements VenuesApi {
     return _map(
       _client.post(
         '/venues/${_segment(venueId)}/grants',
-        body: {'email': email, 'ttl': ttlFromHours(hours)},
+        body: {'ttl': ttlFromHours(hours)},
       ),
       (decoded) => _object(decoded, VenueGrant.fromJson, 'grant'),
     );
   }
 
   @override
-  Future<VenueGrant> revokeGrant(String venueId, String grantId) => _map(
-        _client.delete(
-          '/venues/${_segment(venueId)}/grants/${_segment(grantId)}',
-        ),
+  Future<VenueGrant> revokeGrant(String grantId) => _map(
+        _client.delete('/grants/${_segment(grantId)}'),
         (decoded) => _object(decoded, VenueGrant.fromJson, 'grant'),
       );
 
