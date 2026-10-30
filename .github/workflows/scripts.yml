@@ -1,0 +1,49 @@
+name: scripts
+
+on:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - ".github/workflows/scripts.yml"
+
+# Least-privilege token for all jobs; actions are pinned to commit SHAs
+# so a compromised tag cannot move the pin. Renovate/Dependabot manages bumps.
+permissions:
+  contents: read
+
+jobs:
+  scripts-harness:
+    name: shell lint and Docker-free harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The v0.10.0 release ships no checksum file, so the tarball digest is
+      # pinned directly (computed from the official release asset at
+      # adoption time); a changed digest fails the build.
+      - name: Install shellcheck (pinned, digest-verified)
+        run: |
+          cd /tmp
+          curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz" -o shellcheck.tar.xz
+          echo "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz
+          sudo mv shellcheck-v0.10.0/shellcheck /usr/local/bin/shellcheck
+
+      - name: Parse-check every shell script (bash -n)
+        run: |
+          for f in scripts/*.sh scripts/test/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: Lint shell scripts (shellcheck)
+        run: shellcheck scripts/lib.sh scripts/spike.sh scripts/token-inspect.sh scripts/test/run-tests.sh
+
+      - name: Byte-compile the stub (python3 -m py_compile)
+        run: python3 -m py_compile scripts/test/stub_logto.py
+
+      # Exercises both tools end-to-end against the bundled Logto stub:
+      # spike --stub, spike --stub --user-flow, the dead-endpoint failure
+      # contract, and token-inspect decode/expiry behavior. Docker-free by
+      # design — the live Compose run belongs to the e2e smoke task.
+      - name: Run the scripts test harness
+        run: scripts/test/run-tests.sh
