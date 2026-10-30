@@ -19,6 +19,7 @@ import (
 
 	"github.com/clubins/auth-hack/backend/internal/auth"
 	"github.com/clubins/auth-hack/backend/internal/config"
+	"github.com/clubins/auth-hack/backend/internal/grants"
 	"github.com/clubins/auth-hack/backend/internal/server"
 	"github.com/clubins/auth-hack/backend/internal/venues"
 )
@@ -43,6 +44,7 @@ func run(out io.Writer) error {
 	slog.SetDefault(logger)
 
 	store := venues.NewMemStore(venues.DefaultSeed())
+	grantStore := grants.NewMemStore()
 
 	// The guard verifies Logto access tokens on every protected route.
 	// Discovery and the first JWKS fetch run here so a broken IdP fails
@@ -63,7 +65,7 @@ func run(out io.Writer) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           server.New(server.Options{Logger: logger, Store: store, Guard: guard}),
+		Handler:           server.New(server.Options{Logger: logger, Store: store, GrantStore: grantStore, Guard: guard}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
