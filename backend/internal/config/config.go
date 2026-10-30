@@ -33,6 +33,11 @@ const (
 	// It is derived from the audience so scope and audience always agree
 	// on the API's origin.
 	VenueReadScope = DefaultAudience + "/venues:read"
+	// VenueWriteScope is the OAuth scope that protects venue write routes,
+	// including grant creation and revocation. Like VenueReadScope it is
+	// derived from the audience so scope and audience always agree on the
+	// API's origin.
+	VenueWriteScope = DefaultAudience + "/venues:write"
 	// DefaultJWKSCacheTTL is how long the auth guard keeps fetched IdP
 	// signing keys before refreshing them proactively.
 	DefaultJWKSCacheTTL = time.Hour

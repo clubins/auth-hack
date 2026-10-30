@@ -49,6 +49,14 @@ func TestRoutes(t *testing.T) {
 			wantContent: "application/json",
 		},
 		{
+			name:        "grants list is wired and empty",
+			method:      "GET",
+			target:      "/venues/v-001/grants",
+			wantStatus:  http.StatusOK,
+			wantBody:    []any{},
+			wantContent: "application/json",
+		},
+		{
 			name:        "unknown venue is a json 404",
 			method:      "GET",
 			target:      "/venues/nope",
