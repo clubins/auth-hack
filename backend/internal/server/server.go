@@ -43,6 +43,11 @@ type Options struct {
 	ReadingsStore venues.ReadingsStore
 	// GrantStore backs the grants routes; nil falls back to an empty MemStore.
 	GrantStore grants.Store
+	// GrantBounds optionally overrides the renter-grant TTL bounds (test
+	// and e2e environments that must prove expiry in seconds); nil keeps
+	// the product's locked 8h–24h window. Config validates the values
+	// before the API boots.
+	GrantBounds *grants.Bounds
 	// Guard authenticates the protected routes and injects the request
 	// Principal; nil leaves them unauthenticated (local development,
 	// tests without an IdP).
@@ -67,7 +72,11 @@ func New(opts Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 
-	grantHandler := grants.NewHandler(opts.GrantStore, opts.Logger)
+	grantBounds := grants.DefaultBounds()
+	if opts.GrantBounds != nil {
+		grantBounds = *opts.GrantBounds
+	}
+	grantHandler := grants.NewHandlerWithBounds(opts.GrantStore, grantBounds, opts.Logger)
 
 	if opts.Guard == nil {
 		// Development and tests without an IdP: the same routes, none

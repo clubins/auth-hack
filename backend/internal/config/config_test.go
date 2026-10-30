@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/clubins/auth-hack/backend/internal/grants"
 )
 
 func TestParse(t *testing.T) {
@@ -23,17 +25,21 @@ func TestParse(t *testing.T) {
 				IssuerURL:    DefaultIssuerURL,
 				Audience:     DefaultAudience,
 				JWKSCacheTTL: DefaultJWKSCacheTTL,
+				GrantMinTTL:  DefaultGrantMinTTL,
+				GrantMaxTTL:  DefaultGrantMaxTTL,
 			},
 		},
 		{
 			name: "blank values fall back to defaults",
-			env:  map[string]string{"PORT": "  ", "LOG_LEVEL": "", "ISSUER_URL": "", "AUDIENCE": "", "JWKS_URL": "", "JWKS_CACHE_TTL": ""},
+			env:  map[string]string{"PORT": "  ", "LOG_LEVEL": "", "ISSUER_URL": "", "AUDIENCE": "", "JWKS_URL": "", "JWKS_CACHE_TTL": "", "GRANT_MIN_TTL": "", "GRANT_MAX_TTL": ""},
 			want: Config{
 				Port:         DefaultPort,
 				LogLevel:     slog.LevelInfo,
 				IssuerURL:    DefaultIssuerURL,
 				Audience:     DefaultAudience,
 				JWKSCacheTTL: DefaultJWKSCacheTTL,
+				GrantMinTTL:  DefaultGrantMinTTL,
+				GrantMaxTTL:  DefaultGrantMaxTTL,
 			},
 		},
 		{
@@ -45,6 +51,8 @@ func TestParse(t *testing.T) {
 				"AUDIENCE":       "https://api.clubins.de",
 				"JWKS_URL":       "https://login.clubins.de/oidc/keys",
 				"JWKS_CACHE_TTL": "30m",
+				"GRANT_MIN_TTL":  "1s",
+				"GRANT_MAX_TTL":  "2h",
 			},
 			want: Config{
 				Port:         9000,
@@ -53,6 +61,8 @@ func TestParse(t *testing.T) {
 				Audience:     "https://api.clubins.de",
 				JWKSURL:      "https://login.clubins.de/oidc/keys",
 				JWKSCacheTTL: 30 * time.Minute,
+				GrantMinTTL:  1 * time.Second,
+				GrantMaxTTL:  2 * time.Hour,
 			},
 		},
 		{
@@ -108,6 +118,26 @@ func TestParse(t *testing.T) {
 		{
 			name:    "negative jwks cache ttl is rejected",
 			env:     map[string]string{"JWKS_CACHE_TTL": "-5m"},
+			wantErr: true,
+		},
+		{
+			name:    "non-duration grant min ttl is rejected",
+			env:     map[string]string{"GRANT_MIN_TTL": "soon"},
+			wantErr: true,
+		},
+		{
+			name:    "zero grant min ttl is rejected",
+			env:     map[string]string{"GRANT_MIN_TTL": "0s"},
+			wantErr: true,
+		},
+		{
+			name:    "negative grant max ttl is rejected",
+			env:     map[string]string{"GRANT_MAX_TTL": "-1h"},
+			wantErr: true,
+		},
+		{
+			name:    "grant min ttl above max is rejected",
+			env:     map[string]string{"GRANT_MIN_TTL": "25h", "GRANT_MAX_TTL": "24h"},
 			wantErr: true,
 		},
 	}
@@ -166,6 +196,18 @@ func TestVenueReadScope(t *testing.T) {
 	// guard wiring and client configuration always agree on it.
 	if got := VenueReadScope; got != "https://api.clubins.de/venues:read" {
 		t.Fatalf("VenueReadScope = %q, want %q", got, "https://api.clubins.de/venues:read")
+	}
+}
+
+// TestGrantTTLDefaultsAgree pins the config package's grant-TTL defaults to
+// the grants package's: the two must move together or a config default and
+// the enforced bound would silently diverge.
+func TestGrantTTLDefaultsAgree(t *testing.T) {
+	if DefaultGrantMinTTL != grants.MinTTL {
+		t.Fatalf("DefaultGrantMinTTL = %s, grants.MinTTL = %s", DefaultGrantMinTTL, grants.MinTTL)
+	}
+	if DefaultGrantMaxTTL != grants.MaxTTL {
+		t.Fatalf("DefaultGrantMaxTTL = %s, grants.MaxTTL = %s", DefaultGrantMaxTTL, grants.MaxTTL)
 	}
 }
 

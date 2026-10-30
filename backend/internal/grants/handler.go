@@ -24,15 +24,23 @@ const maxBodyBytes = 1 << 20
 type Handler struct {
 	service *Service
 	logger  *slog.Logger
+	// bounds are the TTL limits create enforces, echoed in error messages.
+	bounds Bounds
 }
 
-// NewHandler returns a handler backed by store. A nil logger falls back to
-// slog.Default.
+// NewHandler returns a handler backed by store, enforcing the product's
+// locked default bounds. A nil logger falls back to slog.Default.
 func NewHandler(store Store, logger *slog.Logger) *Handler {
+	return NewHandlerWithBounds(store, DefaultBounds(), logger)
+}
+
+// NewHandlerWithBounds returns a handler backed by store, enforcing bounds
+// (see Service). A nil logger falls back to slog.Default.
+func NewHandlerWithBounds(store Store, bounds Bounds, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{service: NewService(store), logger: logger}
+	return &Handler{service: NewServiceWithBounds(store, bounds), logger: logger, bounds: bounds}
 }
 
 // Register mounts the grant routes on mux.
@@ -65,7 +73,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ttl, err := decodeTTL(w, r)
+	ttl, err := decodeTTL(h.bounds, w, r)
 	if err != nil {
 		return // decodeTTL already wrote the response
 	}
@@ -88,10 +96,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 // decodeTTL reads the optional {"ttl": "..."} body and returns the request's
-// TTL, or DefaultTTL for an empty body. Status-code mapping:
+// TTL, or the bounds' default for an empty body. Status-code mapping:
 // malformed JSON or an unparseable duration is a syntax problem (400);
 // a parseable duration outside the bounds is a semantic one (422).
-func decodeTTL(w http.ResponseWriter, r *http.Request) (time.Duration, error) {
+func decodeTTL(bounds Bounds, w http.ResponseWriter, r *http.Request) (time.Duration, error) {
 	var body struct {
 		TTL string `json:"ttl"`
 	}
@@ -102,15 +110,15 @@ func decodeTTL(w http.ResponseWriter, r *http.Request) (time.Duration, error) {
 		return 0, err
 	}
 	if body.TTL == "" {
-		return DefaultTTL, nil
+		return bounds.Default, nil
 	}
 	ttl, err := time.ParseDuration(body.TTL)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "ttl must be a duration string such as \"8h\"")
 		return 0, err
 	}
-	if ttl < MinTTL || ttl > MaxTTL {
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("ttl out of bounds (want between %s and %s)", MinTTL, MaxTTL))
+	if ttl < bounds.Min || ttl > bounds.Max {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("ttl out of bounds (want between %s and %s)", bounds.Min, bounds.Max))
 		return 0, fmt.Errorf("%w: %s", ErrInvalidTTL, ttl)
 	}
 	return ttl, nil

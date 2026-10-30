@@ -151,6 +151,57 @@ func TestHandlerCreateGrant(t *testing.T) {
 	}
 }
 
+// withAuthServerBounds is withAuthServer with custom grant bounds, the
+// way the e2e smoke overrides TTL limits (GRANT_MIN_TTL) to prove expiry.
+func withAuthServerBounds(store Store, bounds Bounds, p Principal) *httptest.Server {
+	mux := http.NewServeMux()
+	NewHandlerWithBounds(store, bounds, nil).Register(mux)
+	var h http.Handler = mux
+	if p != nil {
+		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mux.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
+		})
+	}
+	return httptest.NewServer(h)
+}
+
+// TestHandlerCreateGrantWithCustomBounds proves the HTTP surface enforces
+// the configured bounds, not the package constants: a ttl below the custom
+// minimum is a 422 naming those bounds, one inside them is a 201.
+func TestHandlerCreateGrantWithCustomBounds(t *testing.T) {
+	bounds := Bounds{Min: 2 * time.Second, Max: 5 * time.Minute, Default: 2 * time.Second}
+	srv := withAuthServerBounds(NewMemStore(), bounds, stubPrincipal{sub: "renter-1"})
+	t.Cleanup(srv.Close)
+
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantErr    string
+	}{
+		{name: "ttl below the custom minimum is unprocessable", body: `{"ttl":"1s"}`, wantStatus: http.StatusUnprocessableEntity, wantErr: "ttl out of bounds (want between 2s and 5m0s)"},
+		{name: "ttl above the custom maximum is unprocessable", body: `{"ttl":"6m"}`, wantStatus: http.StatusUnprocessableEntity, wantErr: "ttl out of bounds (want between 2s and 5m0s)"},
+		{name: "ttl inside the custom window is created", body: `{"ttl":"1m"}`, wantStatus: http.StatusCreated},
+		{name: "empty body gets the custom default", body: "", wantStatus: http.StatusCreated},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/venues/v-001/grants", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			status, _, body := do(t, srv, req)
+			if status != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body %v)", status, tt.wantStatus, body)
+			}
+			if tt.wantErr != "" && !strings.Contains(jsonOf(t, body), tt.wantErr) {
+				t.Fatalf("error body = %v, want it to contain %q", body, tt.wantErr)
+			}
+		})
+	}
+}
+
 // jsonOf marshals a decoded body back to a string for substring checks.
 func jsonOf(t *testing.T, v any) string {
 	t.Helper()
