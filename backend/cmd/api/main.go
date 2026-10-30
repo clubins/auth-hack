@@ -8,16 +8,27 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 )
 
 func main() {
 	addr := ":8080"
-	if port := os.Getenv("PORT"); port != "" {
-		addr = ":" + port
+	if port, err := strconv.Atoi(os.Getenv("PORT")); err == nil && port > 0 && port < 65536 {
+		addr = ":" + strconv.Itoa(port)
+	}
+
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           newServer(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	log.Printf("listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, newServer()))
+	log.Fatal(srv.ListenAndServe())
 }
 
 // newServer wires the API routes. Method-pattern routing requires Go 1.22+.
