@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParse(t *testing.T) {
@@ -17,37 +18,41 @@ func TestParse(t *testing.T) {
 			name: "defaults when env is empty",
 			env:  nil,
 			want: Config{
-				Port:      DefaultPort,
-				LogLevel:  slog.LevelInfo,
-				IssuerURL: DefaultIssuerURL,
-				Audience:  DefaultAudience,
+				Port:         DefaultPort,
+				LogLevel:     slog.LevelInfo,
+				IssuerURL:    DefaultIssuerURL,
+				Audience:     DefaultAudience,
+				JWKSCacheTTL: DefaultJWKSCacheTTL,
 			},
 		},
 		{
 			name: "blank values fall back to defaults",
-			env:  map[string]string{"PORT": "  ", "LOG_LEVEL": "", "ISSUER_URL": "", "AUDIENCE": "", "JWKS_URL": ""},
+			env:  map[string]string{"PORT": "  ", "LOG_LEVEL": "", "ISSUER_URL": "", "AUDIENCE": "", "JWKS_URL": "", "JWKS_CACHE_TTL": ""},
 			want: Config{
-				Port:      DefaultPort,
-				LogLevel:  slog.LevelInfo,
-				IssuerURL: DefaultIssuerURL,
-				Audience:  DefaultAudience,
+				Port:         DefaultPort,
+				LogLevel:     slog.LevelInfo,
+				IssuerURL:    DefaultIssuerURL,
+				Audience:     DefaultAudience,
+				JWKSCacheTTL: DefaultJWKSCacheTTL,
 			},
 		},
 		{
 			name: "all variables set",
 			env: map[string]string{
-				"PORT":       "9000",
-				"LOG_LEVEL":  "DEBUG",
-				"ISSUER_URL": "https://login.clubins.de",
-				"AUDIENCE":   "https://api.clubins.de",
-				"JWKS_URL":   "https://login.clubins.de/oidc/keys",
+				"PORT":           "9000",
+				"LOG_LEVEL":      "DEBUG",
+				"ISSUER_URL":     "https://login.clubins.de",
+				"AUDIENCE":       "https://api.clubins.de",
+				"JWKS_URL":       "https://login.clubins.de/oidc/keys",
+				"JWKS_CACHE_TTL": "30m",
 			},
 			want: Config{
-				Port:      9000,
-				LogLevel:  slog.LevelDebug,
-				IssuerURL: "https://login.clubins.de",
-				Audience:  "https://api.clubins.de",
-				JWKSURL:   "https://login.clubins.de/oidc/keys",
+				Port:         9000,
+				LogLevel:     slog.LevelDebug,
+				IssuerURL:    "https://login.clubins.de",
+				Audience:     "https://api.clubins.de",
+				JWKSURL:      "https://login.clubins.de/oidc/keys",
+				JWKSCacheTTL: 30 * time.Minute,
 			},
 		},
 		{
@@ -88,6 +93,21 @@ func TestParse(t *testing.T) {
 		{
 			name:    "invalid jwks url is rejected",
 			env:     map[string]string{"JWKS_URL": "no-scheme.example"},
+			wantErr: true,
+		},
+		{
+			name:    "non-duration jwks cache ttl is rejected",
+			env:     map[string]string{"JWKS_CACHE_TTL": "soon"},
+			wantErr: true,
+		},
+		{
+			name:    "zero jwks cache ttl is rejected",
+			env:     map[string]string{"JWKS_CACHE_TTL": "0s"},
+			wantErr: true,
+		},
+		{
+			name:    "negative jwks cache ttl is rejected",
+			env:     map[string]string{"JWKS_CACHE_TTL": "-5m"},
 			wantErr: true,
 		},
 	}
@@ -138,6 +158,14 @@ func TestParseLogLevel(t *testing.T) {
 				t.Fatalf("ParseLogLevel(%q) = %v, want %v", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestVenueReadScope(t *testing.T) {
+	// The scope is a public string constant derived from the audience, so
+	// guard wiring and client configuration always agree on it.
+	if got := VenueReadScope; got != "https://api.clubins.de/venues:read" {
+		t.Fatalf("VenueReadScope = %q, want %q", got, "https://api.clubins.de/venues:read")
 	}
 }
 

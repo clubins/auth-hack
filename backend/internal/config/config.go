@@ -7,6 +7,7 @@
 //	ISSUER_URL OIDC issuer (default http://localhost:3301/oidc, local Logto)
 //	AUDIENCE   expected access-token audience (default https://api.clubins.de)
 //	JWKS_URL   optional JWKS override; empty means issuer discovery
+//	JWKS_CACHE_TTL  how long fetched signing keys stay cached (default 1h)
 package config
 
 import (
@@ -17,6 +18,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -27,6 +29,13 @@ const (
 	DefaultIssuerURL = "http://localhost:3301/oidc"
 	// DefaultAudience is the access-token audience the API expects.
 	DefaultAudience = "https://api.clubins.de"
+	// VenueReadScope is the OAuth scope that protects venue read routes.
+	// It is derived from the audience so scope and audience always agree
+	// on the API's origin.
+	VenueReadScope = DefaultAudience + "/venues:read"
+	// DefaultJWKSCacheTTL is how long the auth guard keeps fetched IdP
+	// signing keys before refreshing them proactively.
+	DefaultJWKSCacheTTL = time.Hour
 )
 
 // Config is the API's runtime configuration, validated at parse time.
@@ -36,8 +45,12 @@ type Config struct {
 	IssuerURL string
 	Audience  string
 	// JWKSURL optionally overrides the OIDC discovery JWKS location;
-	// empty means derive it from IssuerURL when the guard lands.
+	// empty means derive it from the issuer's discovery document.
 	JWKSURL string
+	// JWKSCacheTTL bounds how long the auth guard keeps fetched signing
+	// keys before refreshing them proactively. Unknown key ids always
+	// trigger a refetch attempt regardless of the TTL.
+	JWKSCacheTTL time.Duration
 }
 
 // FromEnv parses the process environment.
@@ -87,6 +100,15 @@ func parse(lookup func(string) (string, bool)) (Config, error) {
 	// JWKSURL stays empty unless set: discovery is the normal path.
 	if raw, ok := lookup("JWKS_URL"); ok && strings.TrimSpace(raw) != "" {
 		cfg.JWKSURL = strings.TrimSpace(raw)
+	}
+	cfg.JWKSCacheTTL = DefaultJWKSCacheTTL
+	if raw, ok := lookup("JWKS_CACHE_TTL"); ok && strings.TrimSpace(raw) != "" {
+		ttl, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil || ttl <= 0 {
+			problems = append(problems, fmt.Errorf("JWKS_CACHE_TTL: invalid duration %q", raw))
+		} else {
+			cfg.JWKSCacheTTL = ttl
+		}
 	}
 
 	for _, env := range []struct {

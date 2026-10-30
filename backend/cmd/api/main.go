@@ -1,7 +1,8 @@
 // Command api serves the Clubins auth-hack reference API.
 //
-// Today it exposes the health check and the unauthenticated venues surface.
-// The OIDC guard and renter grants land in later component tasks.
+// It exposes the health check and the venues surface, the latter guarded by
+// Logto-issued access tokens with the venue read scope. Renter grants land
+// in later component tasks.
 package main
 
 import (
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/clubins/auth-hack/backend/internal/auth"
 	"github.com/clubins/auth-hack/backend/internal/config"
 	"github.com/clubins/auth-hack/backend/internal/server"
 	"github.com/clubins/auth-hack/backend/internal/venues"
@@ -42,9 +44,26 @@ func run(out io.Writer) error {
 
 	store := venues.NewMemStore(venues.DefaultSeed())
 
+	// The guard verifies Logto access tokens on every protected route.
+	// Discovery and the first JWKS fetch run here so a broken IdP fails
+	// the boot loudly instead of failing every request later.
+	verifier, err := auth.NewTokenVerifier(context.Background(), auth.VerifierConfig{
+		IssuerURL:    cfg.IssuerURL,
+		Audience:     cfg.Audience,
+		JWKSURL:      cfg.JWKSURL,
+		JWKSCacheTTL: cfg.JWKSCacheTTL,
+	})
+	if err != nil {
+		return fmt.Errorf("auth verifier: %w", err)
+	}
+	guard, err := auth.NewGuard(auth.GuardOptions{Verifier: verifier, Logger: logger})
+	if err != nil {
+		return fmt.Errorf("auth guard: %w", err)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           server.New(server.Options{Logger: logger, Store: store}),
+		Handler:           server.New(server.Options{Logger: logger, Store: store, Guard: guard}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

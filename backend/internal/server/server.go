@@ -1,6 +1,7 @@
-// Package server wires the API's routes and middleware. The OIDC guard and
-// grant resolution from the build spec land here in later tasks; today the
-// routes are unauthenticated and the middleware stack is request logging.
+// Package server wires the API's routes and middleware. When Options.Guard
+// is set, every route except GET /healthz sits behind bearer-token
+// validation and a scope check; grant resolution from the build spec lands
+// in later tasks.
 package server
 
 import (
@@ -9,6 +10,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/clubins/auth-hack/backend/internal/auth"
+	"github.com/clubins/auth-hack/backend/internal/config"
 	"github.com/clubins/auth-hack/backend/internal/venues"
 )
 
@@ -18,9 +21,15 @@ type Options struct {
 	Logger *slog.Logger
 	// Store backs the venues routes; nil falls back to an empty MemStore.
 	Store venues.Store
+	// Guard authenticates the protected routes and injects the request
+	// Principal; nil leaves them unauthenticated (local development,
+	// tests without an IdP).
+	Guard *auth.Guard
 }
 
-// New builds the API's root handler.
+// New builds the API's root handler. With a Guard, every route except
+// GET /healthz requires a valid bearer token carrying the venue read
+// scope.
 func New(opts Options) http.Handler {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
@@ -31,7 +40,17 @@ func New(opts Options) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	venues.NewHandler(opts.Store, opts.Logger).Register(mux)
+
+	// Guarded routes live on their own mux so the public health check
+	// never passes through the guard.
+	protected := mux
+	if opts.Guard != nil {
+		protected = http.NewServeMux()
+		// The catch-all pattern is correct: /healthz (registered above) is
+		// more specific and wins, everything else is guarded.
+		mux.Handle("/", opts.Guard.Wrap(auth.RequireScope(config.VenueReadScope, protected)))
+	}
+	venues.NewHandler(opts.Store, opts.Logger).Register(protected)
 
 	return withRequestLogging(opts.Logger, mux)
 }
