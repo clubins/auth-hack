@@ -49,9 +49,13 @@ created once in the Admin Console — never by writing into Logto's
 PostgreSQL schema, which breaks silently across Logto releases.
 
 1. Stack up (section 1) and wait for discovery to answer.
-2. Open the Admin Console at `http://localhost:3302` (production:
-   `https://admin.login.clubins.de`) and finish the first-boot admin setup
-   if the instance is brand new.
+2. Open the Admin Console at `http://localhost:3302` and finish the
+   first-boot admin setup if the instance is brand new. The one-time
+   bootstrap is a local-stack procedure: compose publishes the console on
+   3302, while the NixOS prod modules expose only the Logto core
+   (`logto.nix` publishes container port 3001 alone — no console port) and
+   `caddy.nix` defines exactly two vhosts, `login.clubins.de` and
+   `api.clubins.de`.
 3. **Applications → Create application → Machine-to-machine**. Name it
    `Logto seed M2M` (any name works).
 4. On the application's page, open the **Roles** tab and assign the
