@@ -8,6 +8,8 @@
 //	AUDIENCE   expected access-token audience (default https://api.clubins.de)
 //	JWKS_URL   optional JWKS override; empty means issuer discovery
 //	JWKS_CACHE_TTL  how long fetched signing keys stay cached (default 1h)
+//	GRANT_MIN_TTL   shortest renter-grant lifetime (default 8h)
+//	GRANT_MAX_TTL   longest renter-grant lifetime (default 24h)
 package config
 
 import (
@@ -41,6 +43,12 @@ const (
 	// DefaultJWKSCacheTTL is how long the auth guard keeps fetched IdP
 	// signing keys before refreshing them proactively.
 	DefaultJWKSCacheTTL = time.Hour
+	// DefaultGrantMinTTL is the shortest renter-grant lifetime. Keep in
+	// sync with grants.MinTTL — TestGrantTTLDefaultsAgree pins them.
+	DefaultGrantMinTTL = 8 * time.Hour
+	// DefaultGrantMaxTTL is the longest renter-grant lifetime. Keep in
+	// sync with grants.MaxTTL — TestGrantTTLDefaultsAgree pins them.
+	DefaultGrantMaxTTL = 24 * time.Hour
 )
 
 // Config is the API's runtime configuration, validated at parse time.
@@ -56,6 +64,13 @@ type Config struct {
 	// keys before refreshing them proactively. Unknown key ids always
 	// trigger a refetch attempt regardless of the TTL.
 	JWKSCacheTTL time.Duration
+	// GrantMinTTL is the shortest renter-grant lifetime the API accepts;
+	// grants.Service enforces it at creation. GRANT_MIN_TTL exists for
+	// test and e2e environments that must prove expiry in seconds —
+	// production keeps the locked 8h–24h window by leaving it unset.
+	GrantMinTTL time.Duration
+	// GrantMaxTTL is the longest renter-grant lifetime the API accepts.
+	GrantMaxTTL time.Duration
 }
 
 // FromEnv parses the process environment.
@@ -114,6 +129,28 @@ func parse(lookup func(string) (string, bool)) (Config, error) {
 		} else {
 			cfg.JWKSCacheTTL = ttl
 		}
+	}
+
+	cfg.GrantMinTTL = DefaultGrantMinTTL
+	if raw, ok := lookup("GRANT_MIN_TTL"); ok && strings.TrimSpace(raw) != "" {
+		ttl, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil || ttl <= 0 {
+			problems = append(problems, fmt.Errorf("GRANT_MIN_TTL: invalid duration %q", raw))
+		} else {
+			cfg.GrantMinTTL = ttl
+		}
+	}
+	cfg.GrantMaxTTL = DefaultGrantMaxTTL
+	if raw, ok := lookup("GRANT_MAX_TTL"); ok && strings.TrimSpace(raw) != "" {
+		ttl, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil || ttl <= 0 {
+			problems = append(problems, fmt.Errorf("GRANT_MAX_TTL: invalid duration %q", raw))
+		} else {
+			cfg.GrantMaxTTL = ttl
+		}
+	}
+	if cfg.GrantMinTTL > cfg.GrantMaxTTL {
+		problems = append(problems, fmt.Errorf("GRANT_MIN_TTL: %s exceeds GRANT_MAX_TTL %s", cfg.GrantMinTTL, cfg.GrantMaxTTL))
 	}
 
 	for _, env := range []struct {

@@ -185,18 +185,44 @@ type CreateInput struct {
 // Service applies the grant policy on top of a Store: TTL bounds at creation
 // and expiry/revocation checks at use time.
 type Service struct {
-	store Store
+	store  Store
+	bounds Bounds
 }
 
-// NewService returns a service backed by store.
+// Bounds are the grant-lifetime limits a Service enforces at creation:
+// a request's TTL must land in [Min, Max], and a request that omits a TTL
+// gets Default. Built from config (which validates them before the API
+// boots) via NewServiceWithBounds, or from the product's locked window via
+// NewService.
+type Bounds struct {
+	Min     time.Duration
+	Max     time.Duration
+	Default time.Duration
+}
+
+// DefaultBounds returns the product's locked 8h–24h window.
+func DefaultBounds() Bounds {
+	return Bounds{Min: MinTTL, Max: MaxTTL, Default: DefaultTTL}
+}
+
+// NewService returns a service backed by store, enforcing the product's
+// locked default bounds.
 func NewService(store Store) *Service {
-	return &Service{store: store}
+	return &Service{store: store, bounds: DefaultBounds()}
+}
+
+// NewServiceWithBounds returns a service backed by store, enforcing bounds.
+// Bounds come from config, which validates them (positive, min <= max)
+// before the API boots; invalid values make every creation fail loudly
+// rather than being silently corrected here.
+func NewServiceWithBounds(store Store, bounds Bounds) *Service {
+	return &Service{store: store, bounds: bounds}
 }
 
 // Create validates the TTL bounds, mints a fresh token, and stores the grant.
 func (s *Service) Create(ctx context.Context, in CreateInput, now time.Time) (Grant, error) {
-	if in.TTL < MinTTL || in.TTL > MaxTTL {
-		return Grant{}, fmt.Errorf("%w: %s (want between %s and %s)", ErrInvalidTTL, in.TTL, MinTTL, MaxTTL)
+	if in.TTL < s.bounds.Min || in.TTL > s.bounds.Max {
+		return Grant{}, fmt.Errorf("%w: %s (want between %s and %s)", ErrInvalidTTL, in.TTL, s.bounds.Min, s.bounds.Max)
 	}
 	id, err := newID()
 	if err != nil {

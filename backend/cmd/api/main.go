@@ -48,6 +48,16 @@ func run(out io.Writer) error {
 	readingsStore := venues.NewReadingsMemStore(venues.DefaultReadingsSeed())
 	grantStore := grants.NewMemStore()
 
+	// Grant TTL bounds come from config (validated at parse time). The
+	// default is the product's locked 8h–24h window; GRANT_MIN_TTL exists
+	// for test/e2e environments that must prove expiry in seconds. The
+	// default TTL tracks the minimum, as grants.DefaultTTL does.
+	grantBounds := grants.Bounds{
+		Min:     cfg.GrantMinTTL,
+		Max:     cfg.GrantMaxTTL,
+		Default: cfg.GrantMinTTL,
+	}
+
 	// The guard verifies Logto access tokens on every protected route.
 	// Discovery and the first JWKS fetch run here so a broken IdP fails
 	// the boot loudly instead of failing every request later.
@@ -66,8 +76,15 @@ func run(out io.Writer) error {
 	}
 
 	srv := &http.Server{
-		Addr:              cfg.Addr(),
-		Handler:           server.New(server.Options{Logger: logger, Store: store, ReadingsStore: readingsStore, GrantStore: grantStore, Guard: guard}),
+		Addr: cfg.Addr(),
+		Handler: server.New(server.Options{
+			Logger:        logger,
+			Store:         store,
+			ReadingsStore: readingsStore,
+			GrantStore:    grantStore,
+			GrantBounds:   &grantBounds,
+			Guard:         guard,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

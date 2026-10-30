@@ -36,7 +36,7 @@ jobs:
           done
 
       - name: Lint shell scripts (shellcheck)
-        run: shellcheck scripts/lib.sh scripts/spike.sh scripts/token-inspect.sh scripts/test/run-tests.sh
+        run: shellcheck scripts/lib.sh scripts/smoke.sh scripts/spike.sh scripts/token-inspect.sh scripts/test/run-tests.sh
 
       - name: Byte-compile the stub (python3 -m py_compile)
         run: python3 -m py_compile scripts/test/stub_logto.py

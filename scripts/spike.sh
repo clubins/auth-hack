@@ -9,6 +9,13 @@
 #   scripts/spike.sh --stub         run the same steps against the bundled
 #                                   Logto stub (scripts/test/stub_logto.py)
 #                                   instead of a real stack; no Docker needed
+#   scripts/spike.sh --token-optional
+#                                   with --token-optional, missing token-
+#                                   issuance credentials turn steps 3-4 into
+#                                   SKIP (with the reason) instead of FAIL;
+#                                   discovery and JWKS still must pass. Used
+#                                   by the e2e smoke: a fresh compose stack
+#                                   has no M2M bootstrap yet (idp/README.md).
 #
 # Each step prints its name and PASS/FAIL. Exit 0 only when every step
 # passes; otherwise exit 1, naming the first failed step.
@@ -42,13 +49,14 @@ STUB_PID=''
 
 STUB=false
 USER_FLOW=false
+TOKEN_OPTIONAL=false
 
 usage() {
   cat >&2 <<USAGE
 $PREFIX verify the Clubins auth stack step by step.
 
 Usage:
-  scripts/spike.sh [--user-flow] [--stub]
+  scripts/spike.sh [--user-flow] [--stub] [--token-optional]
 
 Steps:
   1. discovery document      GET <endpoint>/oidc/.well-known/openid-configuration
@@ -63,6 +71,11 @@ Options:
   --user-flow  drive the customer-auth flow with the seeded test user
                (experimental: verified against the stub, not a live Logto)
   --stub       point the run at scripts/test/stub_logto.py (no Docker)
+  --token-optional
+               missing issuance credentials SKIP steps 3-4 (with the
+               reason) instead of failing; discovery and JWKS still must
+               pass. Credentials come from the one-time Admin Console
+               bootstrap documented in idp/README.md.
   -h, --help   this help
 
 Config (environment, with infra/.env fallback — see scripts/README.md):
@@ -131,28 +144,37 @@ cleanup() {
 trap cleanup EXIT
 
 # ---- step framework ------------------------------------------------------
-# Each step sets REASON on failure and returns nonzero; run_step records the
-# first failure and keeps running the remaining steps for diagnostics.
+# Each step sets REASON and returns 0 (pass), 2 (skip — REASON is the
+# documented why), or 1 (fail — REASON names what broke). run_step records
+# the first failure and keeps running the remaining steps for diagnostics.
 
 STEP_TOTAL=4
 STEP_NUM=0
 FIRST_FAILED=''
+SKIP_COUNT=0
 REASON=''
 
 run_step() {
-  local name="$1" fn="$2" ok=0
+  local name="$1" fn="$2" rc=0
   shift 2
   STEP_NUM=$((STEP_NUM + 1))
   REASON=''
-  "$fn" "$@" || ok=1
-  if [ "$ok" -eq 0 ]; then
-    printf '%s step %s/%s: %s — PASS\n' "$PREFIX" "$STEP_NUM" "$STEP_TOTAL" "$name"
-  else
-    printf '%s step %s/%s: %s — FAIL (%s)\n' "$PREFIX" "$STEP_NUM" "$STEP_TOTAL" "$name" "${REASON:-unspecified}"
-    if [ -z "$FIRST_FAILED" ]; then
-      FIRST_FAILED="$name"
-    fi
-  fi
+  "$fn" "$@" || rc=$?
+  case "$rc" in
+    0)
+      printf '%s step %s/%s: %s — PASS\n' "$PREFIX" "$STEP_NUM" "$STEP_TOTAL" "$name"
+      ;;
+    2)
+      SKIP_COUNT=$((SKIP_COUNT + 1))
+      printf '%s step %s/%s: %s — SKIP (%s)\n' "$PREFIX" "$STEP_NUM" "$STEP_TOTAL" "$name" "${REASON:-unspecified}"
+      ;;
+    *)
+      printf '%s step %s/%s: %s — FAIL (%s)\n' "$PREFIX" "$STEP_NUM" "$STEP_TOTAL" "$name" "${REASON:-unspecified}"
+      if [ -z "$FIRST_FAILED" ]; then
+        FIRST_FAILED="$name"
+      fi
+      ;;
+  esac
 }
 
 # ---- steps ----------------------------------------------------------------
@@ -212,6 +234,14 @@ require_vars_step() {
     REASON="missing required config: $missing (set them in the environment or infra/.env)"
     return 1
   fi
+}
+
+# have_vars NAME... — silent variant of require_vars_step: just checks.
+have_vars() {
+  local name
+  for name in "$@"; do
+    [ -n "${!name:-}" ] || return 1
+  done
 }
 
 # issue_token_m2m — the default headless path: client_credentials with the
@@ -385,8 +415,16 @@ exp_call() {
 # step_token — dispatch on the chosen path.
 step_token() {
   if [ "$USER_FLOW" = true ]; then
+    if [ "$TOKEN_OPTIONAL" = true ] && ! have_vars LOGTO_NATIVE_CLIENT_ID TEST_USER_EMAIL TEST_USER_PASSWORD; then
+      REASON="no user-flow credentials (LOGTO_NATIVE_CLIENT_ID, TEST_USER_EMAIL, TEST_USER_PASSWORD) — the one-time bootstrap + seed in idp/README.md provides them"
+      return 2
+    fi
     issue_token_user_flow
   else
+    if [ "$TOKEN_OPTIONAL" = true ] && ! have_vars LOGTO_M2M_CLIENT_ID LOGTO_M2M_CLIENT_SECRET; then
+      REASON="no M2M credentials (LOGTO_M2M_CLIENT_ID, LOGTO_M2M_CLIENT_SECRET) — the one-time Admin Console bootstrap in idp/README.md provides them"
+      return 2
+    fi
     issue_token_m2m
   fi
 }
@@ -395,6 +433,10 @@ step_token() {
 # and payload (delegated to token-inspect.sh, the single decode path).
 step_claims() {
   if [ -z "${ACCESS_TOKEN:-}" ]; then
+    if [ "$TOKEN_OPTIONAL" = true ]; then
+      REASON="no access token (issuance was skipped)"
+      return 2
+    fi
     REASON="no access token from step 3"
     return 1
   fi
@@ -455,6 +497,7 @@ main() {
     case "$arg" in
       --user-flow) USER_FLOW=true ;;
       --stub) STUB=true ;;
+      --token-optional) TOKEN_OPTIONAL=true ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown argument: $arg (see --help)" ;;
     esac
@@ -495,7 +538,12 @@ main() {
     printf '%s FAILED: first failed step: %s\n' "$PREFIX" "$FIRST_FAILED" >&2
     exit 1
   fi
-  printf '%s all %s steps passed\n' "$PREFIX" "$STEP_TOTAL"
+  if [ "$SKIP_COUNT" -gt 0 ]; then
+    printf '%s all %s steps settled (%s passed, %s skipped — see SKIP reasons above)\n' \
+      "$PREFIX" "$STEP_TOTAL" "$((STEP_TOTAL - SKIP_COUNT))" "$SKIP_COUNT"
+  else
+    printf '%s all %s steps passed\n' "$PREFIX" "$STEP_TOTAL"
+  fi
 }
 
 main "$@"

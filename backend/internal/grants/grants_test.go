@@ -53,6 +53,35 @@ func TestServiceCreateTTLBounds(t *testing.T) {
 	}
 }
 
+func TestServiceCreateWithCustomBounds(t *testing.T) {
+	// Test and e2e environments prove expiry in seconds by overriding the
+	// bounds (GRANT_MIN_TTL); production keeps the locked defaults.
+	bounds := Bounds{Min: 2 * time.Second, Max: 5 * time.Minute, Default: 2 * time.Second}
+	svc := NewServiceWithBounds(NewMemStore(), bounds)
+
+	t.Run("the locked defaults no longer apply", func(t *testing.T) {
+		if _, err := svc.Create(context.Background(), CreateInput{VenueID: "v-001", Subject: "renter-1", TTL: 8 * time.Hour}, base); !errors.Is(err, ErrInvalidTTL) {
+			t.Fatalf("Create(8h) error = %v, want ErrInvalidTTL", err)
+		}
+	})
+
+	t.Run("a ttl inside the custom window is accepted", func(t *testing.T) {
+		g, err := svc.Create(context.Background(), CreateInput{VenueID: "v-001", Subject: "renter-1", TTL: 2 * time.Second}, base)
+		if err != nil {
+			t.Fatalf("Create(2s): %v", err)
+		}
+		if want := base.Add(2 * time.Second); !g.ExpiresAt.Equal(want) {
+			t.Fatalf("ExpiresAt = %s, want %s", g.ExpiresAt, want)
+		}
+	})
+
+	t.Run("a zero ttl is still rejected — the handler fills the default", func(t *testing.T) {
+		if _, err := svc.Create(context.Background(), CreateInput{VenueID: "v-001", Subject: "renter-1"}, base); !errors.Is(err, ErrInvalidTTL) {
+			t.Fatalf("Create(no ttl) error = %v, want ErrInvalidTTL", err)
+		}
+	})
+}
+
 func TestServiceResolveExpiry(t *testing.T) {
 	svc := NewService(NewMemStore())
 

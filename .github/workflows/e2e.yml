@@ -1,0 +1,45 @@
+name: e2e
+
+on:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "infra/**"
+      - "idp/**"
+      - "backend/**"
+      - ".github/workflows/e2e.yml"
+
+# Least-privilege token for all jobs; actions are pinned to commit SHAs
+# so a compromised tag cannot move the pin. Renovate/Dependabot manages bumps.
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: two-phase smoke (real compose + stub IdP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+
+      # Phase A boots the REAL Compose stack (Logto OSS, Postgres, Go API)
+      # and seeds it through Logto's Management API. Without M2M client
+      # credentials the token-issuance steps report documented SKIPs; the
+      # discovery, JWKS, health, and unauthenticated-guard assertions still
+      # run against the real issuer.
+      - name: Phase A — real Compose stack (Logto, Postgres, API)
+        run: scripts/smoke.sh --phase=a
+
+      # Phase B runs the same backend binary against the Python stub IdP
+      # over real HTTP and proves the full authenticated flow: RS256 token
+      # acceptance, negative paths (401/403), renter-grant scoping, TTL
+      # bounds, expiry, and revocation. Docker-free by design.
+      - name: Phase B — authenticated flow against the stub IdP
+        run: scripts/smoke.sh --phase=b
+
+      # Every smoke step names its first failure and the script exits 1
+      # naming it — the step output above is the evidence artifact.
