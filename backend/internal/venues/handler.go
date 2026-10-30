@@ -11,23 +11,25 @@ import (
 // behind the auth guard and scope middleware; handlers here stay free of
 // identity logic and test against plain stores (stubbed or real).
 type Handler struct {
-	store  Store
-	logger *slog.Logger
+	store    Store
+	readings ReadingsStore
+	logger   *slog.Logger
 }
 
-// NewHandler returns a handler backed by store. A nil logger falls back to
-// slog.Default.
-func NewHandler(store Store, logger *slog.Logger) *Handler {
+// NewHandler returns a handler backed by store and readings. A nil logger
+// falls back to slog.Default.
+func NewHandler(store Store, readings ReadingsStore, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{store: store, logger: logger}
+	return &Handler{store: store, readings: readings, logger: logger}
 }
 
 // Register mounts the venue routes on mux.
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /venues", h.list)
 	mux.HandleFunc("GET /venues/{id}", h.get)
+	mux.HandleFunc("GET /venues/{id}/readings", h.listReadings)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +56,33 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, v)
 	}
+}
+
+// listReadings serves the venue's temperature readings. Existence is decided
+// by the venues store — an unknown venue is 404 exactly like the venue read,
+// even though the readings store would list it as empty — so clients see
+// one notion of which venues exist.
+func (h *Handler) listReadings(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.store.Get(r.Context(), id); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeError(w, http.StatusNotFound, "venue not found")
+			return
+		}
+		h.logger.Error("get venue", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	rs, err := h.readings.ListForVenue(r.Context(), id)
+	if err != nil {
+		h.logger.Error("list readings", slog.Any("err", err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if rs == nil {
+		rs = []Reading{}
+	}
+	writeJSON(w, http.StatusOK, rs)
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

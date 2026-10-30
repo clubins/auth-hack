@@ -1,8 +1,9 @@
 // Command api serves the Clubins auth-hack reference API.
 //
-// It exposes the health check and the venues surface, the latter guarded by
-// Logto-issued access tokens with the venue read scope. Renter grants land
-// in later component tasks.
+// It exposes the health check, the venues surface (including per-venue
+// readings), and the renter-grant surface, all guarded by Logto-issued
+// access tokens with the venue scopes; venue reads also accept renter
+// grant tokens.
 package main
 
 import (
@@ -44,6 +45,7 @@ func run(out io.Writer) error {
 	slog.SetDefault(logger)
 
 	store := venues.NewMemStore(venues.DefaultSeed())
+	readingsStore := venues.NewReadingsMemStore(venues.DefaultReadingsSeed())
 	grantStore := grants.NewMemStore()
 
 	// The guard verifies Logto access tokens on every protected route.
@@ -65,7 +67,7 @@ func run(out io.Writer) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           server.New(server.Options{Logger: logger, Store: store, GrantStore: grantStore, Guard: guard}),
+		Handler:           server.New(server.Options{Logger: logger, Store: store, ReadingsStore: readingsStore, GrantStore: grantStore, Guard: guard}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

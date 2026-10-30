@@ -178,9 +178,11 @@ func (h *Handler) Resolve(ctx context.Context, token string, now time.Time) (Gra
 	return h.service.Resolve(ctx, token, now)
 }
 
-// venueReadPath matches the single-venue read route the guard adds access to:
-// GET /venues/{id} and nothing else.
-var venueReadPath = regexp.MustCompile(`^/venues/([^/]+)$`)
+// venueReadPath matches the venue-read routes the guard adds access to:
+// GET /venues/{id} and its readings view GET /venues/{id}/readings — the
+// read surface a venue grant buys — and nothing else, notably none of the
+// grant management routes.
+var venueReadPath = regexp.MustCompile(`^/venues/([^/]+)(?:/readings)?$`)
 
 // Resolver is the policy-checked token lookup the venue-read guard needs.
 type Resolver interface {
@@ -189,12 +191,13 @@ type Resolver interface {
 
 var _ Resolver = (*Handler)(nil)
 
-// VenueReadGuard authorizes GET /venues/{id} for holders of a valid grant
-// token. It sits OUTSIDE the OIDC guard on the venue-read route: a grant
-// token is opaque and could never verify as a Logto JWT, so requests it
-// authorizes must never reach that verification. Everything it does not
-// answer — no bearer header, or a token that resolves to no grant (Logto
-// JWTs among them) — falls through to the OIDC credential path.
+// VenueReadGuard authorizes the venue-read routes (GET /venues/{id} and
+// GET /venues/{id}/readings) for holders of a valid grant token. It sits
+// OUTSIDE the OIDC guard on those routes: a grant token is opaque and could
+// never verify as a Logto JWT, so requests it authorizes must never reach
+// that verification. Everything it does not answer — no bearer header, or a
+// token that resolves to no grant (Logto JWTs among them) — falls through to
+// the OIDC credential path.
 type VenueReadGuard struct {
 	resolver Resolver
 	// venueRead is served when a grant authorizes the read.
