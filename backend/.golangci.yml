@@ -1,0 +1,7 @@
+# golangci-lint config for the backend module (v2 format).
+# gosec enabled per the orchestrator security-hardening update.
+version: "2"
+
+linters:
+  enable:
+    - gosec
