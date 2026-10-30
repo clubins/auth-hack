@@ -7,10 +7,9 @@ import (
 	"net/http"
 )
 
-// Handler serves the venues REST surface. Routes are unauthenticated for
-// now: the OIDC guard task wraps this handler with bearer-token validation
-// and scope checks, so handlers here stay free of identity logic and test
-// against plain stores (stubbed or real).
+// Handler serves the venues REST surface. The server mounts these routes
+// behind the auth guard and scope middleware; handlers here stay free of
+// identity logic and test against plain stores (stubbed or real).
 type Handler struct {
 	store  Store
 	logger *slog.Logger
