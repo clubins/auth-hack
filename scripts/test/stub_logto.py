@@ -7,10 +7,14 @@ auth, and authorization_code with a real S256 PKCE check), the authorize
 endpoint, and the /api/experience routes (init, password verification,
 identification, submit) with interaction-session cookies.
 
-The tokens it mints are structurally real three-part base64url JWTs whose
-signature is a fake blob — nothing here is verifiable cryptography, by
-design: the stub tests script logic, not protocol fidelity. Logto response
-shapes follow the v1.45.0 source (packages/core/src/routes/experience).
+The tokens it mints are REAL RS256 JWTs: the stub generates an RSA-2048
+keypair at boot (pure-stdlib crypto, see the rs256 section below), signs
+every token with it, and serves the public half via the JWKS endpoint —
+so the Go API's verifier (backend/internal/auth) accepts these tokens for
+real. What stays stubbed is everything AROUND the crypto: response shapes
+are simplified, state is in-memory and per-process, and nothing here is
+Logto. Logto response shapes follow the v1.45.0 source
+(packages/core/src/routes/experience).
 
 State is in-memory and per-process. --port 0 binds a free port and the
 first stdout line reports the base URL ("listening http://127.0.0.1:PORT").
@@ -19,7 +23,10 @@ first stdout line reports the base URL ("listening http://127.0.0.1:PORT").
 import argparse
 import base64
 import hashlib
+import hmac
 import json
+import math
+import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +43,90 @@ def b64url_json(payload: dict) -> str:
     return b64url(json.dumps(payload).encode())
 
 
+# -- RS256 in pure stdlib ----------------------------------------------------
+#
+# The backend verifies signatures for real (backend/internal/auth: RS256
+# against the JWKS), so the stub signs with a genuine RSA-2048 key generated
+# at boot: Miller-Rabin prime search, PKCS#1 v1.5 padding per RFC 8017 §9.2
+# with the SHA-256 DigestInfo. No third-party dependencies — the stub must
+# run anywhere python3 runs.
+
+# DER prefix that wraps a SHA-256 digest inside a PKCS#1 v1.5 signature.
+_SHA256_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+def _sieve_primes(limit: int) -> list[int]:
+    flags = [True] * (limit + 1)
+    flags[0] = flags[1] = False
+    for i in range(2, int(limit**0.5) + 1):
+        if flags[i]:
+            for j in range(i * i, limit + 1, i):
+                flags[j] = False
+    return [i for i, is_prime in enumerate(flags) if is_prime]
+
+
+# Trial division by these rejects most composites before Miller-Rabin runs.
+_SMALL_PRIMES = _sieve_primes(1000)
+
+
+def _is_probable_prime(n: int, rounds: int = 40) -> bool:
+    if n < 2:
+        return False
+    for p in _SMALL_PRIMES:
+        if n == p:
+            return True
+        if n % p == 0:
+            return False
+    d = n - 1
+    r = 0
+    while d % 2 == 0:
+        d //= 2
+        r += 1
+    for _ in range(rounds):
+        a = secrets.randbelow(n - 3) + 2  # random base in [2, n-2]
+        x = pow(a, d, n)
+        if x in (1, n - 1):
+            continue
+        for _ in range(r - 1):
+            x = (x * x) % n
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
+
+def _gen_prime(bits: int) -> int:
+    while True:
+        # Top bit set makes it exactly `bits` wide; the |= 1 keeps it odd.
+        candidate = secrets.randbits(bits) | (1 << (bits - 1)) | 1
+        if _is_probable_prime(candidate):
+            return candidate
+
+
+def _gen_rsa_key(bits: int = 2048) -> tuple[int, int, int]:
+    """Returns (n, e, d) for an RS256-capable RSA key."""
+    e = 65537
+    while True:
+        p = _gen_prime(bits // 2)
+        q = _gen_prime(bits // 2)
+        if p == q:
+            continue
+        n = p * q
+        lam = (p - 1) * (q - 1) // math.gcd(p - 1, q - 1)
+        if math.gcd(e, lam) == 1:
+            return n, e, pow(e, -1, lam)
+
+
+def rs256_sign(signing_input: bytes, n: int, d: int) -> bytes:
+    """Signs per JWS RS256: PKCS#1 v1.5 with the SHA-256 DigestInfo."""
+    k = (n.bit_length() + 7) // 8
+    digest_info = _SHA256_DIGEST_INFO + hashlib.sha256(signing_input).digest()
+    padded = b"\x00\x01" + b"\xff" * (k - len(digest_info) - 3) + b"\x00" + digest_info
+    m = int.from_bytes(padded, "big")
+    return pow(m, d, n).to_bytes(k, "big")
+
+
 class StubLogto:
     def __init__(self, m2m_id: str, m2m_secret: str, test_email: str, test_password: str):
         self.lock = threading.Lock()
@@ -44,16 +135,36 @@ class StubLogto:
         self.test_email = test_email
         self.test_password = test_password
         self.base = ""
+        self.kid = "stub-1"
+        # One real RSA-2048 key per process; every token is signed with it.
+        self.rsa_n, self.rsa_e, self.rsa_d = _gen_rsa_key()
         self.interactions: dict[str, dict] = {}  # uid -> {redirect_uri, code_challenge, resource, scope, state}
         self.codes: dict[str, str] = {}  # code -> uid
         self.experience_ready: set[str] = set()  # uids through PUT /api/experience
         self.verifications: dict[str, str] = {}  # verificationId -> uid
 
+    def jwks(self) -> dict:
+        """The public half of the signing key, in JWK form."""
+        n_bytes = self.rsa_n.to_bytes((self.rsa_n.bit_length() + 7) // 8, "big")
+        e_bytes = self.rsa_e.to_bytes((self.rsa_e.bit_length() + 7) // 8, "big")
+        return {
+            "keys": [
+                {
+                    "kty": "RSA",
+                    "use": "sig",
+                    "alg": "RS256",
+                    "kid": self.kid,
+                    "n": b64url(n_bytes),
+                    "e": b64url(e_bytes),
+                }
+            ]
+        }
+
     # -- token minting ------------------------------------------------------
 
     def mint_token(self, aud: str, scope: str, sub: str) -> str:
         now = int(time.time())
-        header = {"alg": "RS256", "kid": "stub-1", "typ": "JWT"}
+        header = {"alg": "RS256", "kid": self.kid, "typ": "JWT"}
         payload = {
             "iss": f"{self.base}/oidc",
             "aud": aud,
@@ -62,7 +173,8 @@ class StubLogto:
             "exp": now + 3600,
             "scope": scope,
         }
-        signature = b64url(b"stub-signature-not-verified")
+        signing_input = f"{b64url_json(header)}.{b64url_json(payload)}".encode()
+        signature = b64url(rs256_sign(signing_input, self.rsa_n, self.rsa_d))
         return f"{b64url_json(header)}.{b64url_json(payload)}.{signature}"
 
 
@@ -138,21 +250,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/oidc/jwks":
-                self._json(
-                    200,
-                    {
-                        "keys": [
-                            {
-                                "kty": "RSA",
-                                "use": "sig",
-                                "alg": "RS256",
-                                "kid": "stub-1",
-                                "n": b64url(b"stub-modulus-not-a-real-key"),
-                                "e": "AQAB",
-                            }
-                        ]
-                    },
-                )
+                self._json(200, self.stub.jwks())
                 return
             # Resume endpoint (redirectTo target): hand back the code.
             if path.startswith("/oidc/auth/"):
@@ -290,20 +388,33 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(400, "unsupported_grant_type")
 
     def _token_client_credentials(self, form):
+        # RFC 7617 Basic auth, padding-tolerant: curl -u sends standard
+        # base64 WITH padding; the old literal-comparison silently rejected
+        # any credentials whose base64 needed it.
         auth = self.headers.get("Authorization", "")
-        expected = f"Basic {b64url(f'{self.stub.m2m_id}:{self.stub.m2m_secret}'.encode())}"
-        if auth != expected:
+        candidate = auth[len("Basic "):] if auth.startswith("Basic ") else ""
+        try:
+            decoded = base64.b64decode(candidate + "=" * (-len(candidate) % 4), validate=True).decode()
+        except (ValueError, UnicodeDecodeError):
+            raise ApiError(401, "invalid_client") from None
+        expected = f"{self.stub.m2m_id}:{self.stub.m2m_secret}"
+        if not hmac.compare_digest(decoded, expected):
             raise ApiError(401, "invalid_client")
         resource = form.get("resource", [""])[0]
         if not resource:
             raise ApiError(400, "missing resource indicator")
+        # Simplification vs. Logto: a real Logto M2M token scopes itself by
+        # the application's assigned role, not by an echoed request param.
+        # The stub lets the caller ask for exactly the scope it wants so one
+        # stub process can play both the venues-scoped user and the owner.
+        scope = form.get("scope", ["all"])[0]
         self._json(
             200,
             {
-                "access_token": self.stub.mint_token(resource, "all", self.stub.m2m_id),
+                "access_token": self.stub.mint_token(resource, scope, self.stub.m2m_id),
                 "expires_in": 3600,
                 "token_type": "Bearer",
-                "scope": "all",
+                "scope": scope,
             },
         )
 

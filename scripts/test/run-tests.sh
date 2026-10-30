@@ -7,6 +7,8 @@
 #   3. spike.sh --stub --user-flow exits 0 (authorization code + PKCE +
 #      password sign-in through the Experience API, against the stub)
 #   4. spike.sh against a dead endpoint exits 1 naming the first failed step
+#   5. spike.sh --token-optional turns missing issuance credentials into
+#      SKIP steps (exit 0), while the same run without the flag fails
 #
 # The tokens are minted locally; their signatures are fake blobs — decode
 # only, nothing verifies them (same honesty as the tools under test).
@@ -102,6 +104,33 @@ run_spike() { # $1 = log file, remaining = args to spike.sh
   bash "$SPIKE" "$@" >"$log_file" 2>&1
 }
 
+# boot_stub — start the Logto stub WITHOUT letting spike inject credentials
+# (unlike spike --stub): the harness controls the environment explicitly so
+# the --token-optional skip path can actually trigger.
+boot_stub() {
+  local log="$WORK/stub-manual.log" attempt=0
+  python3 "$HERE/stub_logto.py" --port 0 \
+    --m2m-id harness-m2m --m2m-secret harness-m2m-secret \
+    --test-email harness@example.com --test-password harness-password \
+    >"$log" 2>&1 &
+  STUB_PID=$!
+  until grep -qs '^listening ' "$log"; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 50 ]; then
+      cat "$log" >&2
+      echo "stub did not start within 5s" >&2
+      exit 1
+    fi
+    if ! kill -0 "$STUB_PID" 2>/dev/null; then
+      cat "$log" >&2
+      echo "stub died on startup" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  MANUAL_STUB_BASE="$(sed -n 's/^listening //p' "$log")"
+}
+
 # --- token-inspect.sh -------------------------------------------------------
 
 PADDED="$(mint_token 3600 RS256)"
@@ -170,6 +199,31 @@ assert "spike against a dead endpoint exits 1" is_nonzero "$RC_DEAD"
 assert "spike names the first failed step (discovery)" \
   output_has 'first failed step: discovery document' "$WORK/spike-dead.log"
 assert "spike reports the first failed step exactly once" output_has_one_first_failed_line "$WORK/spike-dead.log"
+
+# --- spike.sh --token-optional ------------------------------------------------
+
+boot_stub
+set +e
+LOGTO_ENDPOINT="$MANUAL_STUB_BASE" run_spike "$WORK/spike-optional.log" --token-optional
+RC_OPTIONAL=$?
+LOGTO_ENDPOINT="$MANUAL_STUB_BASE" run_spike "$WORK/spike-nocreds.log"
+RC_NOCREDS=$?
+set -e
+
+assert "spike --token-optional without credentials exits 0" is_zero "$RC_OPTIONAL"
+assert "spike --token-optional still passes discovery and JWKS" output_pass_count_is "$WORK/spike-optional.log" 2
+assert "spike --token-optional reports token issuance as SKIP with the reason" \
+  output_has 'access token issuance — SKIP (no M2M credentials' "$WORK/spike-optional.log"
+assert "spike --token-optional reports the claims step as SKIP" \
+  output_has 'claims decode and dump — SKIP' "$WORK/spike-optional.log"
+assert "spike --token-optional points at the documented bootstrap" \
+  output_has 'idp/README.md' "$WORK/spike-optional.log"
+assert "spike --token-optional summarizes the skip" \
+  output_has '2 passed, 2 skipped' "$WORK/spike-optional.log"
+
+assert "spike without credentials still fails without the flag" is_nonzero "$RC_NOCREDS"
+assert "spike without credentials names token issuance as the first failure" \
+  output_has 'first failed step: access token issuance' "$WORK/spike-nocreds.log"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
