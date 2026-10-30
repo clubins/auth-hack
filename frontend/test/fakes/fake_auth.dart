@@ -33,11 +33,13 @@ class FakeAuthService implements AuthService {
     Object? signInError,
     Object? signOutError,
     String? accessToken,
+    Completer<void>? signInGate,
   })  : _user = user,
         _initError = initError,
         _signInError = signInError,
         _signOutError = signOutError,
         _accessToken = accessToken,
+        _signInGate = signInGate,
         _changes = StreamController<AuthUser?>.broadcast();
 
   AuthUser? _user;
@@ -45,6 +47,11 @@ class FakeAuthService implements AuthService {
   final Object? _signInError;
   final Object? _signOutError;
   final String? _accessToken;
+
+  /// When set, [signIn] does not complete until the completer does — lets
+  /// a test observe the busy state mid-sign-in.
+  final Completer<void>? _signInGate;
+
   final StreamController<AuthUser?> _changes;
 
   int initCalls = 0;
@@ -86,6 +93,9 @@ class FakeAuthService implements AuthService {
   @override
   Future<void> signIn() async {
     signInCalls++;
+    if (_signInGate != null) {
+      await _signInGate.future;
+    }
     if (_signInError != null) {
       throw _signInError;
     }
