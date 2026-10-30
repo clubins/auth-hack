@@ -1,0 +1,10 @@
+# SOPS configuration for the Clubins auth stack.
+#
+# PLACEHOLDERS ONLY — there is no real key material in this file. Before
+# encrypting anything, replace the age recipient below with the public key
+# of the host key at /var/lib/sops-nix/key.txt (see infra/nixos/README.md,
+# "Applying to a host", steps 2-3).
+creation_rules:
+  # Everything under infra/secrets/ is encrypted to the host age key.
+  - path_regex: infra/secrets/.*\.enc\.(env|ya?ml|json)$
+    age: age1REPLACE-WITH-THE-HOST-AGE-RECIPIENT-PUBLIC-KEY
