@@ -2,39 +2,60 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'api/api.dart';
 import 'auth/auth.dart';
+import 'ui/ui.dart';
 
 void main() {
+  final authService = OidcAuthService.fromConfig(AuthConfig.fromEnvironment());
   runApp(
     ClubinsApp(
-      authService: OidcAuthService.fromConfig(AuthConfig.fromEnvironment()),
+      authService: authService,
+      venuesApi: HttpVenuesApi(
+        ApiClient(
+          baseUrl: ApiConfig.fromEnvironment().baseUrl,
+          // freshAccessToken refreshes silently when the token is stale.
+          tokenProvider: authService.freshAccessToken,
+        ),
+      ),
     ),
   );
 }
 
-/// Placeholder app shell — real OIDC sign-in screen, token inspector and the
-/// venues UI land in a later UI task.
+/// App shell: restores the session, then renders the sign-in entry or the
+/// venues home. Screens take their collaborators by constructor — this is
+/// the only wiring point.
 class ClubinsApp extends StatelessWidget {
-  const ClubinsApp({super.key, required this.authService});
+  const ClubinsApp({
+    super.key,
+    required this.authService,
+    required this.venuesApi,
+  });
 
   final AuthService authService;
+  final VenuesApi venuesApi;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Clubins',
       theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
-      home: AuthGate(authService: authService),
+      home: AuthGate(authService: authService, venuesApi: venuesApi),
     );
   }
 }
 
 /// Restores the cached session at startup, then renders one of four
-/// placeholder states: initializing, init error, signed out, signed in.
+/// states: initializing, init error, signed out, signed in.
 class AuthGate extends StatefulWidget {
-  const AuthGate({super.key, required this.authService});
+  const AuthGate({
+    super.key,
+    required this.authService,
+    required this.venuesApi,
+  });
 
   final AuthService authService;
+  final VenuesApi venuesApi;
 
   @override
   State<AuthGate> createState() => _AuthGateState();
@@ -55,7 +76,8 @@ class _AuthGateState extends State<AuthGate> {
   @override
   void didUpdateWidget(AuthGate oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.authService != widget.authService) {
+    if (oldWidget.authService != widget.authService ||
+        oldWidget.venuesApi != widget.venuesApi) {
       unawaited(_init());
     }
   }
@@ -88,162 +110,34 @@ class _AuthGateState extends State<AuthGate> {
     unawaited(_init());
   }
 
-  Future<void> _handleSignIn() async {
-    try {
-      await widget.authService.signIn();
-    } on AuthException catch (e) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.message)));
-    }
-  }
-
-  Future<void> _handleSignOut() async {
-    try {
-      await widget.authService.signOut();
-    } on AuthException catch (e) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.message)));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return switch (_phase) {
-      _InitPhase.initializing => const _MessagePlaceholder(
+      _InitPhase.initializing => const LoadingView(
           label: 'Connecting to login.clubins.de…',
         ),
-      _InitPhase.failed => _ErrorPlaceholder(
-          error: _initError!,
+      _InitPhase.failed => ErrorRetryView(
+          title: 'Authentication failed to start',
+          message: '$_initError',
           onRetry: _retryInit,
         ),
       _InitPhase.ready => StreamBuilder<AuthUser?>(
           stream: widget.authService.authStateChanges,
           builder: (context, snapshot) {
-            final user = snapshot.data;
+            // The stream replays the current user on listen; fall back to
+            // it while the first event is still in flight so a restored
+            // session never flashes the sign-in screen for a frame.
+            final user = snapshot.data ?? widget.authService.currentUser;
             if (user == null) {
-              return _SignedOutPlaceholder(onSignIn: _handleSignIn);
+              return SignInScreen(authService: widget.authService);
             }
-            return _SignedInPlaceholder(
+            return HomeScreen(
+              authService: widget.authService,
+              venuesApi: widget.venuesApi,
               user: user,
-              onSignOut: _handleSignOut,
             );
           },
         ),
     };
-  }
-}
-
-class _MessagePlaceholder extends StatelessWidget {
-  const _MessagePlaceholder({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 12),
-            Text(label, style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ErrorPlaceholder extends StatelessWidget {
-  const _ErrorPlaceholder({required this.error, required this.onRetry});
-
-  final Object error;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline),
-              const SizedBox(height: 12),
-              const Text('Authentication failed to start'),
-              const SizedBox(height: 8),
-              Text(
-                '$error',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 12),
-              FilledButton(onPressed: onRetry, child: const Text('Retry')),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SignedOutPlaceholder extends StatelessWidget {
-  const _SignedOutPlaceholder({required this.onSignIn});
-
-  final Future<void> Function() onSignIn;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Clubins auth reference'),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: onSignIn,
-              child: const Text('Sign in'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SignedInPlaceholder extends StatelessWidget {
-  const _SignedInPlaceholder({required this.user, required this.onSignOut});
-
-  final AuthUser user;
-  final Future<void> Function() onSignOut;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Signed in as ${user.subject}'),
-            const SizedBox(height: 16),
-            OutlinedButton(
-              onPressed: onSignOut,
-              child: const Text('Sign out'),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
