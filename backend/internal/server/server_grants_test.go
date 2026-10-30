@@ -6,7 +6,6 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -119,51 +118,21 @@ func TestGrantsCredentialComposition(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	request := func(t *testing.T, method, target, authorization, body string) (int, []byte, http.Header) {
-		t.Helper()
-		req, err := http.NewRequest(method, srv.URL+target, strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("build request: %v", err)
-		}
-		if authorization != "" {
-			req.Header.Set("Authorization", authorization)
-		}
-		resp, err := srv.Client().Do(req)
-		if err != nil {
-			t.Fatalf("do request: %v", err)
-		}
-		t.Cleanup(func() { _ = resp.Body.Close() })
-		raw, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		return resp.StatusCode, raw, resp.Header
-	}
-	// asObject decodes a JSON-object response body.
-	asObject := func(t *testing.T, raw []byte) map[string]any {
-		t.Helper()
-		var out map[string]any
-		if err := json.Unmarshal(raw, &out); err != nil {
-			t.Fatalf("decode body %s: %v", raw, err)
-		}
-		return out
-	}
-
 	t.Run("venue read with a valid grant token serves the venue", func(t *testing.T) {
-		status, raw, _ := request(t, http.MethodGet, "/venues/v-001", "Bearer "+grantSeedToken("active"), "")
+		status, raw, _ := doJSON(t, srv, http.MethodGet, "/venues/v-001", "Bearer "+grantSeedToken("active"), "")
 		if status != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body %s)", status, raw)
 		}
 		want := seedVenueJSON(t, "v-001")
-		have := asObject(t, raw)
+		have := asJSONObject(t, raw)
 		if !reflect.DeepEqual(have, want) {
 			t.Fatalf("body = %s, want %v", raw, want)
 		}
 	})
 
 	t.Run("expired grant token is forbidden", func(t *testing.T) {
-		status, raw, _ := request(t, http.MethodGet, "/venues/v-001", "Bearer "+grantSeedToken("expired"), "")
-		body := asObject(t, raw)
+		status, raw, _ := doJSON(t, srv, http.MethodGet, "/venues/v-001", "Bearer "+grantSeedToken("expired"), "")
+		body := asJSONObject(t, raw)
 		if status != http.StatusForbidden {
 			t.Fatalf("status = %d, want 403", status)
 		}
@@ -173,8 +142,8 @@ func TestGrantsCredentialComposition(t *testing.T) {
 	})
 
 	t.Run("revoked grant token is gone", func(t *testing.T) {
-		status, raw, _ := request(t, http.MethodGet, "/venues/v-001", "Bearer "+grantSeedToken("revoked"), "")
-		body := asObject(t, raw)
+		status, raw, _ := doJSON(t, srv, http.MethodGet, "/venues/v-001", "Bearer "+grantSeedToken("revoked"), "")
+		body := asJSONObject(t, raw)
 		if status != http.StatusGone {
 			t.Fatalf("status = %d, want 410", status)
 		}
@@ -184,8 +153,8 @@ func TestGrantsCredentialComposition(t *testing.T) {
 	})
 
 	t.Run("grant token for another venue is forbidden", func(t *testing.T) {
-		status, raw, _ := request(t, http.MethodGet, "/venues/v-001", "Bearer "+grantSeedToken("other"), "")
-		body := asObject(t, raw)
+		status, raw, _ := doJSON(t, srv, http.MethodGet, "/venues/v-001", "Bearer "+grantSeedToken("other"), "")
+		body := asJSONObject(t, raw)
 		if status != http.StatusForbidden {
 			t.Fatalf("status = %d, want 403", status)
 		}
@@ -195,7 +164,7 @@ func TestGrantsCredentialComposition(t *testing.T) {
 	})
 
 	t.Run("venue read without any token is unauthorized by the OIDC guard", func(t *testing.T) {
-		status, _, header := request(t, http.MethodGet, "/venues/v-001", "", "")
+		status, _, header := doJSON(t, srv, http.MethodGet, "/venues/v-001", "", "")
 		if status != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401", status)
 		}
@@ -206,8 +175,8 @@ func TestGrantsCredentialComposition(t *testing.T) {
 
 	t.Run("creating a grant with a venues:write token stamps the token subject", func(t *testing.T) {
 		token := mint("staff-1", config.VenueWriteScope)
-		status, raw, header := request(t, http.MethodPost, "/venues/v-001/grants", "Bearer "+token, `{}`)
-		body := asObject(t, raw)
+		status, raw, header := doJSON(t, srv, http.MethodPost, "/venues/v-001/grants", "Bearer "+token, `{}`)
+		body := asJSONObject(t, raw)
 		if status != http.StatusCreated {
 			t.Fatalf("status = %d, want 201 (body %v)", status, body)
 		}
@@ -225,8 +194,8 @@ func TestGrantsCredentialComposition(t *testing.T) {
 
 	t.Run("creating a grant without venues:write is forbidden", func(t *testing.T) {
 		token := mint("staff-1", config.VenueReadScope)
-		status, raw, header := request(t, http.MethodPost, "/venues/v-001/grants", "Bearer "+token, `{}`)
-		body := asObject(t, raw)
+		status, raw, header := doJSON(t, srv, http.MethodPost, "/venues/v-001/grants", "Bearer "+token, `{}`)
+		body := asJSONObject(t, raw)
 		if status != http.StatusForbidden {
 			t.Fatalf("status = %d, want 403", status)
 		}
@@ -245,7 +214,7 @@ func TestGrantsCredentialComposition(t *testing.T) {
 			{http.MethodGet, "/venues/v-001/grants"},
 			{http.MethodDelete, "/grants/g-active"},
 		} {
-			status, raw, _ := request(t, tc.method, tc.target, "Bearer "+token, `{}`)
+			status, raw, _ := doJSON(t, srv, tc.method, tc.target, "Bearer "+token, `{}`)
 			if status != http.StatusUnauthorized {
 				t.Fatalf("%s %s: status = %d, want 401 (body %s)", tc.method, tc.target, status, raw)
 			}
@@ -254,7 +223,7 @@ func TestGrantsCredentialComposition(t *testing.T) {
 
 	t.Run("grant list responses never carry renter tokens", func(t *testing.T) {
 		token := mint("staff-1", config.VenueReadScope)
-		status, raw, _ := request(t, http.MethodGet, "/venues/v-001/grants", "Bearer "+token, "")
+		status, raw, _ := doJSON(t, srv, http.MethodGet, "/venues/v-001/grants", "Bearer "+token, "")
 		if status != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body %s)", status, raw)
 		}
@@ -265,8 +234,8 @@ func TestGrantsCredentialComposition(t *testing.T) {
 
 	t.Run("revoking a grant with a venues:write token stamps revocation", func(t *testing.T) {
 		createToken := mint("staff-1", config.VenueWriteScope)
-		status, raw, _ := request(t, http.MethodPost, "/venues/v-001/grants", "Bearer "+createToken, `{}`)
-		body := asObject(t, raw)
+		status, raw, _ := doJSON(t, srv, http.MethodPost, "/venues/v-001/grants", "Bearer "+createToken, `{}`)
+		body := asJSONObject(t, raw)
 		if status != http.StatusCreated {
 			t.Fatalf("create status = %d, want 201 (body %v)", status, body)
 		}
@@ -275,8 +244,8 @@ func TestGrantsCredentialComposition(t *testing.T) {
 		createdToken, _ := body["token"].(string)
 
 		revokeToken := mint("staff-1", config.VenueWriteScope)
-		status, raw, _ = request(t, http.MethodDelete, "/grants/"+id, "Bearer "+revokeToken, "")
-		body = asObject(t, raw)
+		status, raw, _ = doJSON(t, srv, http.MethodDelete, "/grants/"+id, "Bearer "+revokeToken, "")
+		body = asJSONObject(t, raw)
 		if status != http.StatusOK {
 			t.Fatalf("revoke status = %d, want 200 (body %v)", status, body)
 		}
@@ -288,7 +257,7 @@ func TestGrantsCredentialComposition(t *testing.T) {
 		}
 
 		// The revoked grant's token no longer authorizes a venue read.
-		status, _, _ = request(t, http.MethodGet, "/venues/v-001", "Bearer "+createdToken, "")
+		status, _, _ = doJSON(t, srv, http.MethodGet, "/venues/v-001", "Bearer "+createdToken, "")
 		if status != http.StatusGone {
 			t.Fatalf("revoked grant read status = %d, want 410", status)
 		}

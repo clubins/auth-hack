@@ -11,7 +11,7 @@ import (
 )
 
 func TestHandlerRoutes(t *testing.T) {
-	handler := NewHandler(NewMemStore(DefaultSeed()), nil)
+	handler := NewHandler(NewMemStore(DefaultSeed()), NewReadingsMemStore(DefaultReadingsSeed()), nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 	srv := httptest.NewServer(mux)
@@ -45,6 +45,22 @@ func TestHandlerRoutes(t *testing.T) {
 			name:        "unknown venue is 404 with json error",
 			method:      "GET",
 			target:      "/venues/nope",
+			wantStatus:  http.StatusNotFound,
+			wantBody:    map[string]any{"error": "venue not found"},
+			wantContent: "application/json",
+		},
+		{
+			name:        "readings for one venue",
+			method:      "GET",
+			target:      "/venues/v-002/readings",
+			wantStatus:  http.StatusOK,
+			wantBody:    normalize(t, seedVenueReadings("v-002")),
+			wantContent: "application/json",
+		},
+		{
+			name:        "readings for unknown venue is 404 with json error",
+			method:      "GET",
+			target:      "/venues/nope/readings",
 			wantStatus:  http.StatusNotFound,
 			wantBody:    map[string]any{"error": "venue not found"},
 			wantContent: "application/json",
@@ -98,8 +114,44 @@ func TestHandlerRoutes(t *testing.T) {
 	}
 }
 
+// seedVenueReadings is the expected readings body for one seed venue.
+func seedVenueReadings(venueID string) []Reading {
+	var out []Reading
+	for _, r := range DefaultReadingsSeed() {
+		if r.VenueID == venueID {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestHandlerReadingsEmptyStoreRendersEmptyArray(t *testing.T) {
+	handler := NewHandler(NewMemStore(DefaultSeed()), NewReadingsMemStore(nil), nil)
+	mux := http.NewServeMux()
+	handler.Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Get(srv.URL + "/venues/v-001/readings")
+	if err != nil {
+		t.Fatalf("GET readings: %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if got := strings.TrimSpace(string(body)); got != "[]" {
+		t.Fatalf("body = %q, want %q (a venue without readings must serialize as [], not null)", got, "[]")
+	}
+}
+
 func TestHandlerListEmptyStoreRendersEmptyArray(t *testing.T) {
-	handler := NewHandler(NewMemStore(nil), nil)
+	handler := NewHandler(NewMemStore(nil), NewReadingsMemStore(nil), nil)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 	srv := httptest.NewServer(mux)

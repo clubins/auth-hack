@@ -344,6 +344,21 @@ func TestVenueReadGuard(t *testing.T) {
 			wantStatus:  http.StatusGone,
 		},
 		{
+			name:        "active grant reads its venue's readings with the grant subject",
+			target:      "/venues/v-001/readings",
+			auth:        "Bearer " + seedToken("active-v001"),
+			wantHandled: true,
+			wantStatus:  http.StatusOK,
+			wantSubject: "renter-1",
+		},
+		{
+			name:        "active grant cannot read another venue's readings",
+			target:      "/venues/v-002/readings",
+			auth:        "Bearer " + seedToken("active-v001"),
+			wantHandled: true,
+			wantStatus:  http.StatusForbidden,
+		},
+		{
 			name:        "unknown token is not handled so the OIDC path can own it",
 			target:      "/venues/v-001",
 			auth:        "Bearer token-never-issued",

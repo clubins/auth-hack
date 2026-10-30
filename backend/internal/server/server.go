@@ -4,13 +4,13 @@
 // because it spans three packages:
 //
 //   - GET /healthz is public.
-//   - GET /venues/{id} is the dual-credential surface: it accepts either a
-//     renter grant token or a Logto bearer token carrying the venue read
-//     scope. Grant tokens are resolved BEFORE the OIDC guard sees the
-//     request — an opaque grant token could never verify as a Logto JWT,
-//     so if the guard ran first it would 401 every grant holder. Tokens
-//     that resolve to no grant (Logto JWTs among them) fall through to
-//     the OIDC guard.
+//   - GET /venues/{id} and GET /venues/{id}/readings are the dual-credential
+//     surfaces: they accept either a renter grant token or a Logto bearer
+//     token carrying the venue read scope. Grant tokens are resolved BEFORE
+//     the OIDC guard sees the request — an opaque grant token could never
+//     verify as a Logto JWT, so if the guard ran first it would 401 every
+//     grant holder. Tokens that resolve to no grant (Logto JWTs among
+//     them) fall through to the OIDC guard.
 //   - Grant management is OIDC-only: venues:write to create or revoke,
 //     venue-read to list. A grant token presented to a management route
 //     fails OIDC verification and gets 401.
@@ -38,6 +38,9 @@ type Options struct {
 	Logger *slog.Logger
 	// Store backs the venues routes; nil falls back to an empty MemStore.
 	Store venues.Store
+	// ReadingsStore backs the readings route; nil falls back to an empty
+	// ReadingsMemStore.
+	ReadingsStore venues.ReadingsStore
 	// GrantStore backs the grants routes; nil falls back to an empty MemStore.
 	GrantStore grants.Store
 	// Guard authenticates the protected routes and injects the request
@@ -54,6 +57,9 @@ func New(opts Options) http.Handler {
 	if opts.Store == nil {
 		opts.Store = venues.NewMemStore(nil)
 	}
+	if opts.ReadingsStore == nil {
+		opts.ReadingsStore = venues.NewReadingsMemStore(nil)
+	}
 	if opts.GrantStore == nil {
 		opts.GrantStore = grants.NewMemStore()
 	}
@@ -68,7 +74,7 @@ func New(opts Options) http.Handler {
 		// guarded. Grant creation still demands a context principal, so
 		// unguarded callers get the same 401 they would behind a guard
 		// that injected nothing.
-		venues.NewHandler(opts.Store, opts.Logger).Register(mux)
+		venues.NewHandler(opts.Store, opts.ReadingsStore, opts.Logger).Register(mux)
 		grantHandler.Register(mux)
 		return withRequestLogging(opts.Logger, mux)
 	}
@@ -81,14 +87,15 @@ func guarded(mux *http.ServeMux, opts Options, grantHandler *grants.Handler) htt
 	guard := opts.Guard
 
 	venueMux := http.NewServeMux()
-	venues.NewHandler(opts.Store, opts.Logger).Register(venueMux)
+	venues.NewHandler(opts.Store, opts.ReadingsStore, opts.Logger).Register(venueMux)
 
-	// Dual-credential venue read: grant tokens are resolved before the
+	// Dual-credential venue reads: grant tokens are resolved before the
 	// OIDC guard can reject a non-Logto bearer.
 	oidcVenueRead := guard.Wrap(withGrantsPrincipal(
 		auth.RequireScope(config.VenueReadScope, venueMux)))
 	readGuard := grants.NewVenueReadGuard(grantHandler, venueMux, opts.Logger)
 	mux.Handle("GET /venues/{id}", handleVenueRead(readGuard, oidcVenueRead))
+	mux.Handle("GET /venues/{id}/readings", handleVenueRead(readGuard, oidcVenueRead))
 
 	// Venue list stays OIDC-only.
 	mux.Handle("GET /venues", guard.Wrap(withGrantsPrincipal(
