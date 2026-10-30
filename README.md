@@ -19,5 +19,5 @@ and docs only. Component tasks land against this base next.
 | Go API       | `backend/`  | `go test ./...`                                      |
 | Flutter app  | `frontend/` | `flutter pub get && flutter analyze && flutter test` |
 | Logto config | `idp/`      | placeholder                                          |
-| Infra        | `infra/`    | placeholder                                          |
+| Infra        | `infra/`    | `bash scripts/check-nix.sh` (Nix parse gate — no Nix runner in CI yet) |
 | Spike tools  | `scripts/`  | placeholder                                          |
